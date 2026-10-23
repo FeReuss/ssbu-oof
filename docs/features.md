@@ -1,0 +1,96 @@
+# Online features: how SSBU implements them and what the server does
+
+Status: **served** = implemented and tested; **partial** = works with documented gaps;
+**todo** = known protocol surface, not implemented. Evidence and layouts: docs/re/protocols.md.
+
+## Foundation (every feature)
+
+| Piece | Protocol | Status |
+| --- | --- | --- |
+| WebSocket + PRUDP Lite transport | — | served (`crates/oof-nex/src/prudp.rs`) |
+| Login: token → ticket | Ticket Granting 10, method 6 (3 for refresh) | served |
+| Secure connection + station URLs | Secure Connection 11, methods 1/4/3/6/8 | served |
+| Server → client events | Notification 14 (`ProcessNotificationEvent`) | served for gatherings |
+| NAT detection | UDP NAT check (`nncs1/2`) | partial: type 2 needs a second IP (second node) to be exact |
+| NAT traversal for Pia P2P | NAT Traversal 3, methods 1/3 relay `InitiateProbe` | served |
+| Relay for peers that cannot connect | NAT Traversal 6 + Pia relay server | todo (reports "no relay") |
+| Server settings / unique IDs | Utility 1, 7, 8 | served (empty settings) |
+
+The match itself never touches the server: Pia connects the consoles P2P (UDP) and runs the
+delay-based netcode between them. The server's job is to put the right players in one gathering,
+tell them each other's addresses, and record results.
+
+## Quickplay
+
+Client: Pia `RandomMatchmakeJob` → Matchmake Extension 40 `AutoMatchmakeWithParam_Postpone` with
+the player's Preferred Rules encoded in the session (game mode, attributes, matchmake param) and
+search criteria; then Match Making 41 `GetSessionURLs` and NAT traversal to reach the host.
+
+Server: **partial.** Joins the oldest open session whose attributes satisfy any criteria (string
+filters: exact, range, empty), else creates one with a random 32-byte Pia session key; notifies the
+owner (3001); handles owner/host migration and disconnects.
+Gaps: rule-similarity scoring (the real service prefers close Global Smash Power and similar rules,
+falling back to looser rules over time); which attribute index holds which rule needs a capture.
+
+## Elite Smash
+
+Client (hypothesis from type names, to confirm): same matchmaking with GSP-restricted criteria; GSP
+and the "Elite" threshold come from the server. The DataStore side carries a `C2SmashPowerChart`
+type (presumably the GSP distribution chart), and results flow through Matchmake Referee (1 `StartRound`, 3 `EndRound`, 4 `EndRoundWithoutReport`,
+12 `GetOrCreateStats`, 14 SSBU-only).
+
+Server: **todo.** Needs (1) Referee rounds and per-fighter stats storage, (2) a GSP model (rating per
+player per fighter, mapped to the GSP scale), (3) the power chart and threshold served through the
+DataStore SSBU methods. Design proposal: Glicko-2 per (player, fighter), GSP = percentile × total
+players, Elite = top percentile published hourly.
+
+## Online co-op (two players, one console)
+
+Client: one NEX login brings two players; `AutoMatchmakeParam.num_participants = 2`.
+
+Server: **served** for capacity: participation counts players, not consoles, so a pair never lands
+in a session without two free seats (tested in `matchmaking::tests`).
+
+## Background matchmaking
+
+Client: issues the same `AutoMatchmakeWithParam_Postpone` while the player stays in offline modes,
+then waits for Pia to complete the mesh. "Postpone" = the server may answer with a session that is
+still filling up.
+
+Server: **served** by the Quickplay path; a session lives until its participants leave.
+
+## Battle Arenas
+
+Client: Matchmake Extension 38 `CreateMatchmakeSessionWithParam` (arena rules in the session,
+optional password), 52 `Browse…` (search by rules), 39 `JoinMatchmakeSessionWithParam` (password /
+Arena ID), 41/48/49/50/51 `Find…` (by ID, owner, friends as participants), 1/2 close/open,
+8/11/12/44 updates (rules, comment, attributes), 34 progress score, 36/37 system password.
+
+Server: **partial.** All of the above are implemented on the in-memory gathering store.
+Gaps: Arena ID generation (the 5-character code; whether the server must assign the `codeword`
+needs a capture — today the client's value is kept), friends-only visibility (needs the friends
+service), arena description moderation.
+
+## Online Tourneys
+
+Client: the Tournament protocol (201, SSBU-only; methods 9–14 sent, 15 understood), Utility 11
+`GetGameEvents` for the schedule, communities (Matchmake Extension 17–22, 54: persistent gatherings)
+for tourney lobbies, `TournamentMatchInfo` / `TournamentPlayerInfo` types for brackets.
+
+Server: **todo.** Utility 11 answers an empty event list (no tourneys scheduled). Next: decode the
+Tournament responses (extractor tables), model events → communities → bracket rounds of matchmake
+sessions, rewards as event results.
+
+## Spectator mode
+
+Client (hypothesis from type names, to confirm): the `C2ReplayBroadcastingInfo` type plus DataStore
+upload/download suggest matches are recorded by the players' consoles and published through
+DataStore, so spectators replay them with a delay and predictions are scored against the result.
+
+Server: **todo.** Needs DataStore (115) with HTTP object storage (prepare-post/complete-post,
+prepare-get) and the SSBU custom DataStore methods that list broadcasts.
+
+## Not requested but on the same stack
+
+Shared Content (stages, Mii fighters, replays: DataStore), reporting (Screening 124), Smash World
+uploads (DataStore). All share the DataStore milestone.

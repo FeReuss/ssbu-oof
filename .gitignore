@@ -1,0 +1,15 @@
+/target/
+oof.toml
+
+# Never commit game data, keys or analysis outputs (LEGAL.md).
+*.nsp
+*.xci
+*.nca
+*.nso
+*.nro
+*.elf
+*.xrefs
+*.keys
+*.noindex/
+/analysis/
+__pycache__/

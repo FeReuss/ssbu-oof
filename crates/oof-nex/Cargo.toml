@@ -1,0 +1,10 @@
+[package]
+name = "oof-nex"
+description = "Wire formats spoken by NEX 4.x game clients: PRUDP Lite, RMC, NEX data streams, Kerberos tickets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+md-5 = "0.11"
+hmac = "0.13"

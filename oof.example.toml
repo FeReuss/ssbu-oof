@@ -1,0 +1,22 @@
+# ssbu-oof server configuration. Copy to oof.toml and edit.
+
+# HTTP + WebSocket listener. Ports connect the game's NEX WebSocket to "/" and call the
+# account API under "/v1". Put a TLS terminator (Caddy, nginx, a cloud load balancer) in front
+# for wss:// in production; see docs/STANDARD.md for what the port must trust.
+listen = "0.0.0.0:8080"
+
+# What clients use to reach this server; written into the secure-server station URL.
+public_host = "127.0.0.1"
+public_port = 8080
+
+# 32+ random bytes as hex, shared by every node of the deployment. Generate with:
+#   openssl rand -hex 32
+secret = "REPLACE_WITH_64_HEX_CHARACTERS_REPLACE_WITH_64_HEX_CHARACTERS_00"
+
+# ID token lifetime in seconds.
+token_ttl_secs = 3600
+
+# NAT check server used by Pia for NAT detection (the game's nncs1/nncs2 hosts).
+[nat_check]
+primary = "0.0.0.0:10025"
+secondary = "0.0.0.0:10125"

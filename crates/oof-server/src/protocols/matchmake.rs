@@ -148,6 +148,13 @@ fn auto_matchmake_with_param(ctx: &mut Ctx, pid: u64, r: &mut Reader) -> Reply {
     let count = players(p.u16()?);
     let criteria = p.list(SearchCriteria::read)?;
     let _target_gids = p.list(|r| r.u32())?;
+    tracing::debug!(
+        pid,
+        game_mode = session.game_mode,
+        attribs = ?session.attribs,
+        criteria = ?criteria.iter().map(|c| (&c.game_mode, &c.attribs)).collect::<Vec<_>>(),
+        "auto matchmake request"
+    );
     let key = accounts::random_bytes::<32>().to_vec();
     let result = with_mm(ctx, |mm| {
         if let Some(gid) = mm.find_open(&criteria, pid, count, &[])

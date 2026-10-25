@@ -135,7 +135,15 @@ impl AccountStore {
              CREATE TABLE IF NOT EXISTS devices (key_hash BLOB PRIMARY KEY,
                  pid INTEGER NOT NULL REFERENCES accounts (pid) ON DELETE CASCADE, name TEXT NOT NULL,
                  created INTEGER NOT NULL, last_used INTEGER NOT NULL);
-             CREATE INDEX IF NOT EXISTS devices_pid ON devices (pid);",
+             CREATE INDEX IF NOT EXISTS devices_pid ON devices (pid);
+             CREATE TABLE IF NOT EXISTS friends (pid INTEGER NOT NULL REFERENCES accounts (pid) ON DELETE CASCADE,
+                 friend INTEGER NOT NULL REFERENCES accounts (pid) ON DELETE CASCADE, since INTEGER NOT NULL,
+                 PRIMARY KEY (pid, friend));
+             CREATE TABLE IF NOT EXISTS friend_requests (sender INTEGER NOT NULL REFERENCES accounts (pid) ON DELETE CASCADE,
+                 receiver INTEGER NOT NULL REFERENCES accounts (pid) ON DELETE CASCADE, created INTEGER NOT NULL,
+                 PRIMARY KEY (sender, receiver));
+             CREATE TABLE IF NOT EXISTS blocks (pid INTEGER NOT NULL REFERENCES accounts (pid) ON DELETE CASCADE,
+                 blocked INTEGER NOT NULL REFERENCES accounts (pid) ON DELETE CASCADE, PRIMARY KEY (pid, blocked));",
         )?;
         Ok(AccountStore { db })
     }
@@ -262,6 +270,131 @@ impl AccountStore {
     }
 }
 
+/// The Switch's friend list limit.
+pub const MAX_FRIENDS: usize = 300;
+
+/// Outcome of `add_friend`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FriendAdd {
+    Requested,
+    /// The other player had asked first: now friends.
+    Friends,
+    AlreadyFriends,
+    UnknownUser,
+    Yourself,
+    /// One of the two blocked the other.
+    Blocked,
+    TooManyFriends,
+}
+
+/// A player's friends (pid, user name), requests both ways and blocked players.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct FriendList {
+    pub friends: Vec<(u64, String)>,
+    pub incoming: Vec<(u64, String)>,
+    pub outgoing: Vec<(u64, String)>,
+    pub blocked: Vec<(u64, String)>,
+}
+
+impl AccountStore {
+    fn pairs(&self, sql: &str, pid: u64) -> rusqlite::Result<Vec<(u64, String)>> {
+        let mut q = self.db.prepare(sql)?;
+        let rows = q.query_map([pid as i64], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    pub fn friend_list(&self, pid: u64) -> rusqlite::Result<FriendList> {
+        Ok(FriendList {
+            friends: self.pairs(
+                "SELECT a.pid, a.username FROM friends f JOIN accounts a ON a.pid = f.friend WHERE f.pid = ?1 ORDER BY f.since",
+                pid,
+            )?,
+            incoming: self.pairs(
+                "SELECT a.pid, a.username FROM friend_requests r JOIN accounts a ON a.pid = r.sender WHERE r.receiver = ?1",
+                pid,
+            )?,
+            outgoing: self.pairs(
+                "SELECT a.pid, a.username FROM friend_requests r JOIN accounts a ON a.pid = r.receiver WHERE r.sender = ?1",
+                pid,
+            )?,
+            blocked: self
+                .pairs("SELECT a.pid, a.username FROM blocks b JOIN accounts a ON a.pid = b.blocked WHERE b.pid = ?1", pid)?,
+        })
+    }
+
+    fn count(&self, sql: &str, a: u64, b: u64) -> rusqlite::Result<i64> {
+        self.db.query_row(sql, params![a as i64, b as i64], |r| r.get(0))
+    }
+
+    /// Sends a friend request to `who` (user name or PID), or accepts theirs.
+    pub fn add_friend(&self, pid: u64, who: &str, now: u64) -> rusqlite::Result<FriendAdd> {
+        let Some(other) = self.find(who)?.map(|a| a.pid) else { return Ok(FriendAdd::UnknownUser) };
+        if other == pid {
+            return Ok(FriendAdd::Yourself);
+        }
+        let blocked = "SELECT COUNT(*) FROM blocks WHERE (pid = ?1 AND blocked = ?2) OR (pid = ?2 AND blocked = ?1)";
+        if self.count(blocked, pid, other)? > 0 {
+            return Ok(FriendAdd::Blocked);
+        }
+        if self.count("SELECT COUNT(*) FROM friends WHERE pid = ?1 AND friend = ?2", pid, other)? > 0 {
+            return Ok(FriendAdd::AlreadyFriends);
+        }
+        let full = |p: u64| -> rusqlite::Result<bool> {
+            let n: i64 = self.db.query_row("SELECT COUNT(*) FROM friends WHERE pid = ?1", [p as i64], |r| r.get(0))?;
+            Ok(n as usize >= MAX_FRIENDS)
+        };
+        if full(pid)? {
+            return Ok(FriendAdd::TooManyFriends);
+        }
+        let theirs = "DELETE FROM friend_requests WHERE sender = ?1 AND receiver = ?2";
+        if self.db.execute(theirs, params![other as i64, pid as i64])? == 1 {
+            if full(other)? {
+                return Ok(FriendAdd::TooManyFriends);
+            }
+            self.db.execute(theirs, params![pid as i64, other as i64])?;
+            for (a, b) in [(pid, other), (other, pid)] {
+                self.db.execute(
+                    "INSERT OR IGNORE INTO friends (pid, friend, since) VALUES (?1, ?2, ?3)",
+                    params![a as i64, b as i64, now as i64],
+                )?;
+            }
+            return Ok(FriendAdd::Friends);
+        }
+        self.db.execute(
+            "INSERT OR IGNORE INTO friend_requests (sender, receiver, created) VALUES (?1, ?2, ?3)",
+            params![pid as i64, other as i64, now as i64],
+        )?;
+        Ok(FriendAdd::Requested)
+    }
+
+    /// Ends a friendship, or withdraws / declines a request, either way. False: there was nothing between them.
+    pub fn remove_friend(&self, pid: u64, other: u64) -> rusqlite::Result<bool> {
+        let (a, b) = (pid as i64, other as i64);
+        let n = self
+            .db
+            .execute("DELETE FROM friends WHERE (pid = ?1 AND friend = ?2) OR (pid = ?2 AND friend = ?1)", [a, b])?
+            + self.db.execute(
+                "DELETE FROM friend_requests WHERE (sender = ?1 AND receiver = ?2) OR (sender = ?2 AND receiver = ?1)",
+                [a, b],
+            )?;
+        Ok(n > 0)
+    }
+
+    /// Blocking also ends any friendship or request between the two.
+    pub fn block(&self, pid: u64, other: u64) -> rusqlite::Result<bool> {
+        if pid == other || self.find(&other.to_string())?.is_none() {
+            return Ok(false);
+        }
+        self.remove_friend(pid, other)?;
+        self.db.execute("INSERT OR IGNORE INTO blocks (pid, blocked) VALUES (?1, ?2)", [pid as i64, other as i64])?;
+        Ok(true)
+    }
+
+    pub fn unblock(&self, pid: u64, other: u64) -> rusqlite::Result<bool> {
+        Ok(self.db.execute("DELETE FROM blocks WHERE pid = ?1 AND blocked = ?2", [pid as i64, other as i64])? == 1)
+    }
+}
+
 /// Administration from the command line (`oof-server <config> account|ban|unban …`), on the server's database: the
 /// running server sees a ban at the next login and disconnects a connected player within 30 s.
 pub fn admin(store: &AccountStore, args: &[String], now: u64) -> Result<String, String> {
@@ -329,6 +462,31 @@ mod tests {
                 && run(&["ban", "ana", "x", "r"]).is_err()
                 && run(&["account", "bea"]).is_err()
         );
+    }
+
+    #[test]
+    fn friends_requests_and_blocks() {
+        let store = AccountStore::open(None).unwrap();
+        let [ana, bea, cid] = ["ana", "bea", "cid"].map(|n| store.create(n, "h", 1).unwrap().unwrap());
+        assert_eq!(store.add_friend(ana, "BEA", 5).unwrap(), FriendAdd::Requested);
+        assert_eq!(store.add_friend(ana, "bea", 5).unwrap(), FriendAdd::Requested); // asking twice keeps one request
+        assert_eq!(store.friend_list(bea).unwrap().incoming, [(ana, "ana".to_string())]);
+        assert_eq!(store.add_friend(bea, &ana.to_string(), 6).unwrap(), FriendAdd::Friends); // accepting = asking back
+        let list = store.friend_list(ana).unwrap();
+        assert_eq!((list.friends, list.incoming.len(), list.outgoing.len()), (vec![(bea, "bea".into())], 0, 0));
+        assert_eq!(store.add_friend(bea, "ana", 7).unwrap(), FriendAdd::AlreadyFriends);
+        assert_eq!(store.add_friend(ana, "ana", 7).unwrap(), FriendAdd::Yourself);
+        assert_eq!(store.add_friend(ana, "nobody", 7).unwrap(), FriendAdd::UnknownUser);
+        // blocking ends the friendship and stops requests both ways
+        assert!(store.block(bea, ana).unwrap());
+        assert!(store.friend_list(ana).unwrap().friends.is_empty());
+        assert_eq!(store.add_friend(ana, "bea", 8).unwrap(), FriendAdd::Blocked);
+        assert_eq!(store.add_friend(bea, "ana", 8).unwrap(), FriendAdd::Blocked);
+        assert!(store.unblock(bea, ana).unwrap() && !store.unblock(bea, ana).unwrap());
+        // declining = removing the request
+        assert_eq!(store.add_friend(cid, "ana", 9).unwrap(), FriendAdd::Requested);
+        assert!(store.remove_friend(ana, cid).unwrap() && !store.remove_friend(ana, cid).unwrap());
+        assert_eq!(store.friend_list(cid).unwrap(), FriendList::default());
     }
 
     #[test]

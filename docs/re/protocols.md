@@ -264,6 +264,22 @@ available, see the news").
 Quickplay, Battle Arenas and Background search work with an empty map (their defaults are on). With all six keys set to
 1, Online Tourney opens (Utility 110/11 with kinds 3, then Tournament 201/9) and Spectator opens (DataStore 115/54).
 
+### Quickplay attributes and Smash level brackets (2026-10-25)
+
+A Quickplay search (109/40) seen from the game: session attributes `[1, 0, 0, 0, 0, 0]`, one criteria list with
+attributes `["1", "0", "0", "", "", ""]` (exact values). The game fills them in `main+0x16963d0`:
+
+- attribute 0: the queue group from 109/58 (above);
+- attribute 1: the player's **Smash level bracket**: the index of the first threshold, among integer settings
+  1101, 1102, ... (as many as setting **1100**), that is not below the player's level (`main+0x1696914..0x169695c`);
+  without settings every player is in bracket 0;
+- attribute 2: 1 for queue mode 3, else 0.
+
+The player's level comes from `main+0x1696b40` (integer setting 1000 as a base, then the player's online level data;
+the fighter select shows "Smash level ---" while there is none). The search sets exact values through Pia's attribute
+setter (`main+0x116c50`); the server's criteria filter already enforces them, so level and rule matching follow
+whatever the client asks once players have a level (Elite Smash / stats).
+
 ## Game events: Utility 110/11 `GetGameEvents` (2026-10-25)
 
 Request `Struct{u32 kinds, String language}` (`language` seen: `"es"`). The online menu asks for kinds 4 at login and the

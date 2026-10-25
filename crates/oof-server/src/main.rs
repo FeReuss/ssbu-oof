@@ -174,6 +174,99 @@ async fn token(
     )
 }
 
+/// Friends API (standard section 7): `{pid, device_key}` identifies the caller; `user` is a user name or a PID.
+#[derive(Deserialize)]
+struct FriendRequest {
+    pid: u64,
+    device_key: String,
+    #[serde(default)]
+    user: String,
+}
+
+/// The caller's account after checking its device key, or the response refusing it.
+fn friend_caller<'a>(
+    state: &'a State,
+    req: &FriendRequest,
+) -> Result<std::sync::MutexGuard<'a, accounts::AccountStore>, Box<axum::response::Response>> {
+    let store = state.accounts.lock().expect("accounts lock");
+    match store.device_ok(req.pid, &req.device_key, now_unix()) {
+        Ok(true) => Ok(store),
+        Ok(false) => Err(Box::new(reply(StatusCode::UNAUTHORIZED, json!({ "error": "unknown device: log in again" })))),
+        Err(e) => Err(Box::new(database_error(e))),
+    }
+}
+
+/// `POST /v1/friends` → `{friends: [{pid, username, online}], incoming, outgoing, blocked: [{pid, username}], max}`;
+/// online = connected to this server.
+async fn friends(AxState(state): App, Json(req): Json<FriendRequest>) -> axum::response::Response {
+    let list = match friend_caller(&state, &req).map(|s| s.friend_list(req.pid)) {
+        Ok(Ok(list)) => list,
+        Ok(Err(e)) => return database_error(e),
+        Err(refused) => return *refused,
+    };
+    let sessions = state.sessions.read().expect("sessions lock");
+    let people =
+        |v: &[(u64, String)]| v.iter().map(|(pid, name)| json!({ "pid": pid, "username": name })).collect::<Vec<_>>();
+    let friends: Vec<_> = list
+        .friends
+        .iter()
+        .map(|(pid, name)| json!({ "pid": pid, "username": name, "online": sessions.contains_key(pid) }))
+        .collect();
+    reply(
+        StatusCode::OK,
+        json!({ "friends": friends, "incoming": people(&list.incoming), "outgoing": people(&list.outgoing),
+                "blocked": people(&list.blocked), "max": accounts::MAX_FRIENDS }),
+    )
+}
+
+/// `POST /v1/friends/add` `{…, user}` → `{state: "requested" | "friends"}`: asks `user`, or accepts their request.
+async fn friends_add(AxState(state): App, Json(req): Json<FriendRequest>) -> axum::response::Response {
+    use accounts::FriendAdd::*;
+    let result = match friend_caller(&state, &req).map(|s| s.add_friend(req.pid, &req.user, now_unix())) {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return database_error(e),
+        Err(refused) => return *refused,
+    };
+    let (code, body) = match result {
+        Requested => (StatusCode::OK, json!({ "state": "requested" })),
+        Friends => (StatusCode::OK, json!({ "state": "friends" })),
+        AlreadyFriends => (StatusCode::OK, json!({ "state": "friends" })),
+        UnknownUser => (StatusCode::NOT_FOUND, json!({ "error": "no such user" })),
+        Yourself => (StatusCode::BAD_REQUEST, json!({ "error": "that is you" })),
+        Blocked => (StatusCode::FORBIDDEN, json!({ "error": "blocked" })),
+        TooManyFriends => (StatusCode::CONFLICT, json!({ "error": "friend list full", "max": accounts::MAX_FRIENDS })),
+    };
+    tracing::info!(pid = req.pid, user = req.user, ?result, "friend request");
+    reply(code, body)
+}
+
+/// `POST /v1/friends/remove|block|unblock` `{…, user}`: ends a friendship or request (either way), blocks (also ending
+/// it) or unblocks. 204, or 404 when there was nothing to change.
+async fn friends_change(state: Arc<State>, req: FriendRequest, action: &'static str) -> axum::response::Response {
+    let store = match friend_caller(&state, &req) {
+        Ok(s) => s,
+        Err(refused) => return *refused,
+    };
+    let other = match store.find(&req.user) {
+        Ok(Some(a)) => a.pid,
+        Ok(None) => return reply(StatusCode::NOT_FOUND, json!({ "error": "no such user" })),
+        Err(e) => return database_error(e),
+    };
+    let done = match action {
+        "remove" => store.remove_friend(req.pid, other),
+        "block" => store.block(req.pid, other),
+        _ => store.unblock(req.pid, other),
+    };
+    match done {
+        Ok(true) => {
+            tracing::info!(pid = req.pid, other, action, "friends");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => reply(StatusCode::NOT_FOUND, json!({ "error": "nothing to change" })),
+        Err(e) => database_error(e),
+    }
+}
+
 /// `POST /v1/logout` `{pid, device_key}`: forgets that device key.
 async fn logout(AxState(state): App, Json(req): Json<DeviceRequest>) -> axum::response::Response {
     match state.accounts.lock().expect("accounts lock").remove_device(req.pid, &req.device_key) {
@@ -221,6 +314,17 @@ pub fn router(state: Arc<State>) -> Router {
         .route("/v1/logout", post(logout))
         .route("/v1/password", post(change_password))
         .route("/v1/status", get(status))
+        .route("/v1/friends", post(friends))
+        .route("/v1/friends/add", post(friends_add))
+        .route(
+            "/v1/friends/remove",
+            post(|AxState(s): App, Json(r): Json<FriendRequest>| friends_change(s, r, "remove")),
+        )
+        .route("/v1/friends/block", post(|AxState(s): App, Json(r): Json<FriendRequest>| friends_change(s, r, "block")))
+        .route(
+            "/v1/friends/unblock",
+            post(|AxState(s): App, Json(r): Json<FriendRequest>| friends_change(s, r, "unblock")),
+        )
         .with_state(state)
 }
 

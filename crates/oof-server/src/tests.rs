@@ -694,6 +694,41 @@ async fn accounts_identify_players_and_bans_hold() {
 }
 
 #[tokio::test]
+async fn friends_api() {
+    let (addr, _state) = start_state(|_| {}).await;
+    let post = |path: &'static str, body: String| async move { http_status(addr, "POST", path, &body).await };
+    let mut device = Vec::new();
+    for name in ["ana", "bea"] {
+        let creds = format!(r#"{{"username":"{name}","password":"secret-pw"}}"#);
+        assert_eq!(post("/v1/accounts", creds.clone()).await.0, 201);
+        let login = post("/v1/login", creds).await.1;
+        device.push((login["pid"].as_u64().unwrap(), login["device_key"].as_str().unwrap().to_string()));
+    }
+    let as_user =
+        |i: usize, user: &str| format!(r#"{{"pid":{},"device_key":"{}","user":"{user}"}}"#, device[i].0, device[i].1);
+    assert_eq!(post("/v1/friends", format!(r#"{{"pid":{},"device_key":"00"}}"#, device[0].0)).await.0, 401);
+    assert_eq!(post("/v1/friends/add", as_user(0, "Bea")).await.1["state"], "requested");
+    assert_eq!(post("/v1/friends/add", as_user(0, "nobody")).await.0, 404);
+    let (code, list) = post("/v1/friends", as_user(1, "")).await;
+    assert_eq!((code, list["incoming"][0]["username"].as_str()), (200, Some("ana")));
+    assert_eq!(post("/v1/friends/add", as_user(1, "ana")).await.1["state"], "friends");
+    let list = post("/v1/friends", as_user(0, "")).await.1;
+    assert_eq!(
+        (list["friends"][0]["pid"].as_u64(), list["friends"][0]["online"].as_bool()),
+        (Some(device[1].0), Some(false))
+    );
+    // presence: connected to the NEX server
+    let token = post("/v1/token", as_user(1, "")).await.1;
+    let _nex = nex_login(addr, device[1].0, token["id_token"].as_str().unwrap()).await;
+    assert_eq!(post("/v1/friends", as_user(0, "")).await.1["friends"][0]["online"].as_bool(), Some(true));
+    assert_eq!(post("/v1/friends/block", as_user(1, "ana")).await.0, 204);
+    assert!(post("/v1/friends", as_user(0, "")).await.1["friends"].as_array().unwrap().is_empty());
+    assert_eq!(post("/v1/friends/add", as_user(0, "bea")).await.0, 403);
+    assert_eq!(post("/v1/friends/unblock", as_user(1, "ana")).await.0, 204);
+    assert_eq!(post("/v1/friends/remove", as_user(1, "ana")).await.0, 404);
+}
+
+#[tokio::test]
 async fn bad_token_is_refused() {
     let addr = start().await;
     let (mut auth, _) = Client::connect(addr, Vec::new()).await;

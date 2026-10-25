@@ -88,9 +88,28 @@ only). The server never sees anything that depends on Nintendo certificates.
   bound to the same port number when it is free (the game advertises that port in its station
   URLs) and SHOULD keep one host socket per game socket so NAT mappings stay stable.
 
-## 7. Friends (`nn::friends`) — v0.1
+## 7. Friends (`nn::friends`) — v0.2
 
-MAY return empty lists. A friends API (presence for "friends' arenas") is planned for v0.2.
+Friendships live on the server, by account. Every call below is `POST` with `{pid, device_key}` (section 2) and, where
+named, `user` (a user name or a PID):
+
+| Endpoint | Does | Answers |
+| --- | --- | --- |
+| `/v1/friends` | the caller's lists | `{friends: [{pid, username, online}], incoming, outgoing, blocked: [{pid, username}], max}` |
+| `/v1/friends/add` | asks `user`, or accepts `user`'s request | `{state: "requested" \| "friends"}`; 404 unknown, 403 blocked, 409 list full (`max` = 300) |
+| `/v1/friends/remove` | ends a friendship, withdraws or declines a request | 204; 404 nothing to change |
+| `/v1/friends/block`, `/v1/friends/unblock` | blocking also ends the friendship and requests | 204; 404 |
+
+`online` means connected to this server's NEX service. A port MUST:
+
+- answer `nn::friends::GetFriendList` with the accepted friends, each friend's NetworkServiceAccountId = its PID (as for
+  the player's own account, section 2), nickname = user name, presence status online/offline from `online`;
+- answer `GetProfileList` (nicknames by account ID) and `GetBlockedUserList` from the same lists;
+- refresh the lists while the game runs (friends come online, requests get accepted);
+- give the player a way to add, accept, remove and block (the console's own friend screens are outside the game).
+
+The game then finds friends' Battle Arenas by itself (Matchmake Extension 109/51 with the friends' PIDs).
+A port MAY keep returning empty lists (v0.1 behaviour); friends' arenas then stay empty.
 
 ## 8. What the server guarantees
 

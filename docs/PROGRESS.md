@@ -60,18 +60,31 @@ moves, and record dead ends so nobody repeats them.
 
 ## Next (in order)
 
-0. **Battle Arenas** (current step). Done 2026-10-25: 109/55 (Arena ID of a gathering, issued by the server on first
-   request, unique among live gatherings) and 109/56 (gathering of a typed Arena ID). With the real game, two
-   instances: create → `ID: ATJ33` shown → "Buscar por ID" (56 → 48) → join (39) → both in the ring → a full 1-on-1
-   match → back to the arena (no server call during an arena match). Layouts and evidence: `docs/re/protocols.md`,
-   "Battle Arenas: Arena ID". Next, in this order: public browse ("Salas públicas", 109/52), an arena with a password
-   (36/37 + join), a player leaving and the owner leaving (ownership change), 3+ players and spectators.
-   Open question: the DateTime in 55's response (issue time or expiry; the creation time is sent and accepted).
-   Pitfalls: the game itself ends Quickplay matches of idle, attack-in-place and self-destructing players (test inputs
-   must move with no drift); a dropped match shows the "interrupted" warning at the next login (it lives in the slot-0
-   record); several RendezVous error constants in `oof-nex/src/rmc.rs` do not match the public NEX table as I recall
-   it (e.g. SESSION_FULL 0x8003006C) — verify them against the game before relying on the shown error codes. In an
-   arena the fighter confirmation has a ~12 s countdown: press A on every instance quickly or the players are sent back.
+0. **Order requested by the user (2026-10-26):** (1) friends, relay for strict NAT, matchmaking by rules / Smash level;
+   (2) Spectator and Shared Content (DataStore uploads over HTTP); (3) Online Tourneys; (4) Elite Smash (Matchmake
+   Referee, Smash level).
+   - Done: Battle Arenas (Arena ID 109/55/56, verified with two instances); friends (accounts, `/v1/friends*`,
+     standard v0.2 section 7; friends' arenas verified with the game); service switches (integer settings
+     9002-9011: Online Tourney and Spectator are off without them); game events (`[[events]]`); Tournament 201/9
+     entry. Level/rule matching needs nothing more from the server (the client sends exact attributes; brackets
+     come from integer settings 1100/1101+), only a level, which comes with (4).
+   - **Next: relay for strict NAT.** Pia relays inside the mesh by itself (another participant); for two players
+     alone it asks the server NAT Traversal 3/6 `GetRelaySignatureKey` (`NexNatServerAddressResolveJob::
+     StepRequestRelayServerSetting`); today the server answers relay mode 0 (no relay). Decode the 3/6 response
+     use and Pia's relay-server packets (`NexNatRelay`, `NATTraversalRelayProtocol`), then add a UDP relay.
+     Found so far (2026-10-26): the 3/6 extractor (`main+0x259720`) reads exactly the six fields the server sends
+     (i32 mode, DateTime, String address, u16 port, i32 address type, u32 game server id); Pia's steps
+     `StepRequestRelayServerSetting` / `StepWaitRequestRelayServerSetting` / `StepResolveRelayServerSetting` are at
+     `main+0xd2eb0` / `0xd3038` / `0xd312c`, `PrepareNatTraversalByRelay` and the waits at `main+0xf0e64` / `0xf159c` /
+     `0xf1670`. `NATTraversalRelayProtocol` has a client-side `Impl` (vtable `main+0x4f5d938`, dispatcher slot 21 =
+     `main+0x259a40`, like the Notification protocol the client serves). **Exact next step:** read
+     `StepResolveRelayServerSetting` and `PrepareNatTraversalByRelay` to learn which mode value enables the relay and
+     what Pia sends to `address:port` first; then answer 3/6 with mode != 0 on a dev config and capture that traffic.
+   - Then: Spectator 115/54 (`C2ReplayBroadcastingInfo`) and the replay/broadcast uploads; Shared Content uploads
+     (115/66 lists); tourney brackets (201/10-14, response 12 layout open); Matchmake Referee 120.
+   Pitfalls: the game ends Quickplay matches of idle/attack-in-place/self-destructing players (test inputs must move);
+   in an arena the fighter confirmation countdown is ~12 s (press A on every instance quickly); several RendezVous
+   error constants in `oof-nex/src/rmc.rs` may not match the game (verify before relying on shown codes).
 
 1. **Two-instance fight.** Rerun two GPU instances and follow the server log: NAT check UDP (10025/10125,
    needs `[nat_check]` in the config), NAT Traversal 3/x, Match Making 21/41 (GetSessionURLs), then Pia

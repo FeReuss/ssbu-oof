@@ -51,6 +51,10 @@ pub async fn serve(mut socket: WebSocket, peer: SocketAddr, state: Arc<State>) {
                 }
             }
             Some(call) = rx.recv() => {
+                if call.protocol == crate::state::KICK {
+                    tracing::info!(%peer, "connection closed by the server (account banned)");
+                    break;
+                }
                 // Server-initiated call: goes to this socket's secure connection.
                 if let Some((key, _)) = conns.iter().find(|(_, c)| c.pid.is_some()) {
                     call_id = call_id.wrapping_add(1);
@@ -83,6 +87,9 @@ pub async fn serve(mut socket: WebSocket, peer: SocketAddr, state: Arc<State>) {
                     let Some(c) = conns.get_mut(&conn) else { continue };
                     match rmc::decode(&data) {
                         Ok(rmc::Message::Request(req)) => {
+                            if (req.protocol, req.method) == (protocols::MATCH_MAKING, 41) {
+                                protocols::matchmake::wait_for_host_station(&state, &req.body).await;
+                            }
                             let mut ctx = Ctx { state: &state, peer, pid: c.pid, cid: c.cid, auth_pid: c.auth_pid };
                             let reply = protocols::dispatch(&mut ctx, &req);
                             c.auth_pid = ctx.auth_pid;

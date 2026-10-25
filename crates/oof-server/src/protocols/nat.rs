@@ -22,6 +22,7 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
         3 => {
             let targets = r.list(|r| r.string())?;
             let station = r.string()?;
+            tracing::debug!(?targets, %station, "RequestProbeInitiationExt");
             relay(ctx, &targets, &station);
             Ok(Vec::new())
         }
@@ -46,6 +47,7 @@ fn relay(ctx: &Ctx, targets: &[String], station: &str) {
     for target in targets {
         let pid = StationUrl::parse(target).and_then(|u| u.get("PID").and_then(|p| p.parse::<u64>().ok()));
         if let Some(pid) = pid.filter(|p| Some(*p) != ctx.pid) {
+            tracing::debug!(from = ?ctx.pid, to = pid, "InitiateProbe");
             ctx.state.call(pid, NAT_TRAVERSAL, INITIATE_PROBE, body.clone());
         }
     }

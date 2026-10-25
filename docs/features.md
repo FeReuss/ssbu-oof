@@ -11,7 +11,7 @@ Status: **served** = implemented and tested; **partial** = works with documented
 | Login: token → ticket | Ticket Granting 10, method 6 (3 for refresh) | served |
 | Secure connection + station URLs | Secure Connection 11, methods 1/4/3/6/8 | served |
 | Server → client events | Notification 14 (`ProcessNotificationEvent`) | served for gatherings |
-| NAT detection | UDP NAT check (`nncs1/2`) | partial: type 2 needs a second IP (second node) to be exact |
+| NAT detection | UDP NAT check (`nncs1/2`) on two addresses × 10025/10125 | served; Pia service on nncs1:33335 todo |
 | NAT traversal for Pia P2P | NAT Traversal 3, methods 1/3 relay `InitiateProbe` | served |
 | Relay for peers that cannot connect | NAT Traversal 6 + Pia relay server | todo (reports "no relay") |
 | Server settings / unique IDs | Utility 1, 7, 8 | served (empty settings) |
@@ -26,7 +26,8 @@ Client: Pia `RandomMatchmakeJob` → Matchmake Extension 40 `AutoMatchmakeWithPa
 the player's Preferred Rules encoded in the session (game mode, attributes, matchmake param) and
 search criteria; then Match Making 41 `GetSessionURLs` and NAT traversal to reach the host.
 
-Server: **partial.** Joins the oldest open session whose attributes satisfy any criteria (string
+Server: **partial** — a whole match was played between two real instances (2026-10-25); each player's slot-0
+DataStore object (115/21) is kept in memory and read back by GetMeta. Joins the oldest open session whose attributes satisfy any criteria (string
 filters: exact, range, empty), else creates one with a random 32-byte Pia session key; notifies the
 owner (3001); handles owner/host migration and disconnects.
 Gaps: rule-similarity scoring (the real service prefers close Global Smash Power and similar rules,
@@ -64,12 +65,14 @@ Server: **served** by the Quickplay path; a session lives until its participants
 Client: Matchmake Extension 38 `CreateMatchmakeSessionWithParam` (arena rules in the session,
 optional password), 52 `Browse…` (search by rules), 39 `JoinMatchmakeSessionWithParam` (password /
 Arena ID), 41/48/49/50/51 `Find…` (by ID, owner, friends as participants), 1/2 close/open,
-8/11/12/44 updates (rules, comment, attributes), 34 progress score, 36/37 system password.
+8/11/12/44 updates (rules, comment, attributes), 34 progress score, 36/37 system password,
+55/56 Arena ID (code of a gathering / gathering of a code).
 
-Server: **partial.** All of the above are implemented on the in-memory gathering store.
-Gaps: Arena ID generation (the 5-character code; whether the server must assign the `codeword`
-needs a capture — today the client's value is kept), friends-only visibility (needs the friends
-service), arena description moderation.
+Server: **partial.** All of the above are implemented on the in-memory gathering store. The server issues
+each arena a 5-character Arena ID (digits and capitals without look-alikes) on the first 109/55. Verified with
+the real game (2026-10-25): create, ID shown, search by ID, join, a full 1-on-1 match and back to the arena.
+Not yet run with the game: public browse (52), passwords (36/37 and join), leaving / owner leaving, 3+ players,
+spectators. Gaps: friends-only visibility (needs the friends service), arena description moderation.
 
 ## Online Tourneys
 

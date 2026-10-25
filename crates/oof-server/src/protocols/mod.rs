@@ -1,11 +1,13 @@
 //! RMC dispatch. Protocol IDs are the ones SSBU 13.0.5 constructs its clients with
-//! (docs/re/protocols.md); method numbers per protocol live in each module. DataStore (115),
-//! Matchmake Referee (120), Screening (124) and Tournament (201) are not served yet.
+//! (docs/re/protocols.md); method numbers per protocol live in each module. Matchmake Referee
+//! (120) and Screening (124) are not served yet; DataStore (115) and Tournament (201) only partly.
 
+pub mod datastore;
 pub mod matchmake;
 pub mod nat;
 pub mod secure;
 pub mod ticket_granting;
+pub mod tournament;
 pub mod utility;
 
 use crate::state::State;
@@ -22,6 +24,8 @@ pub const MATCH_MAKING: u16 = 21;
 pub const MATCH_MAKING_EXT: u16 = 50;
 pub const MATCHMAKE_EXTENSION: u16 = 109;
 pub const UTILITY: u16 = 110;
+pub const DATA_STORE: u16 = 115;
+pub const TOURNAMENT: u16 = 201;
 
 /// A NEX error code for a failed call. Stream read errors become `Core::InvalidArgument`, so
 /// handlers can use `?` on every read.
@@ -31,6 +35,13 @@ pub struct Fail(pub u32);
 impl From<Error> for Fail {
     fn from(_: Error) -> Self {
         Fail(errors::CORE_INVALID_ARGUMENT)
+    }
+}
+
+impl From<rusqlite::Error> for Fail {
+    fn from(e: rusqlite::Error) -> Self {
+        tracing::error!(%e, "database");
+        Fail(errors::CORE_UNKNOWN)
     }
 }
 
@@ -51,6 +62,7 @@ pub struct Ctx<'a> {
 }
 
 pub fn dispatch(ctx: &mut Ctx, req: &Request) -> Vec<u8> {
+    tracing::trace!(protocol = req.protocol, method = req.method, len = req.body.len(), pid = ?ctx.pid, "RMC request");
     let mut body = Reader::new(&req.body);
     let r = &mut body;
     let reply = match (ctx.pid.is_some(), req.protocol) {
@@ -58,6 +70,8 @@ pub fn dispatch(ctx: &mut Ctx, req: &Request) -> Vec<u8> {
         (true, SECURE_CONNECTION) => secure::handle(ctx, req.method, r),
         (true, UTILITY) => utility::handle(ctx, req.method, r),
         (true, NAT_TRAVERSAL) => nat::handle(ctx, req.method, r),
+        (true, DATA_STORE) => datastore::handle(ctx, req.method, r),
+        (true, TOURNAMENT) => tournament::handle(ctx, req.method, r),
         (true, MATCH_MAKING | MATCH_MAKING_EXT | MATCHMAKE_EXTENSION) => {
             matchmake::handle(ctx, req.protocol, req.method, r)
         }
@@ -73,6 +87,11 @@ pub fn dispatch(ctx: &mut Ctx, req: &Request) -> Vec<u8> {
                     method = req.method,
                     len = req.body.len(),
                     "unimplemented RMC method"
+                );
+                // The request bytes are what decoding a new method starts from (debug only: they can hold player data).
+                tracing::debug!(
+                    body = req.body.iter().take(512).map(|b| format!("{b:02x}")).collect::<String>(),
+                    "unimplemented RMC request body"
                 );
             } else {
                 tracing::debug!(protocol = req.protocol, method = req.method, code = format!("{code:#x}"), "RMC error");

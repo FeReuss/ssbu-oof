@@ -13,3 +13,4 @@ oof.toml
 *.noindex/
 /analysis/
 __pycache__/
+.DS_Store

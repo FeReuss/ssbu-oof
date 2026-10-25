@@ -36,8 +36,26 @@ pub fn handle(ctx: &mut Ctx, protocol: u16, method: u32, r: &mut Reader) -> Repl
         (_, 50) => find_by_owner(ctx, r),
         (_, 51) => find_by_participant(ctx, r),
         (_, 52) => browse(ctx, r),
+        (_, 55) => arena_code(ctx, r),
+        (_, 56) => find_by_code(ctx, r),
+        (_, 58) => matchmaking_group(pid, r),
         _ => Err(NOT_IMPLEMENTED),
     }
+}
+
+/// Resolve the queue mode to the group copied into session/search attribute 0 (docs/re/protocols.md).
+fn matchmaking_group(pid: u64, r: &mut Reader) -> Reply {
+    let mode = r.u32()?;
+    // SSBU's call-site mask 0x20ae admits exactly these modes. Group IDs also index a 32-bit mask.
+    if !matches!(mode, 1 | 2 | 3 | 5 | 7 | 13) || r.remaining() != 0 {
+        return Err(Fail(errors::CORE_INVALID_ARGUMENT));
+    }
+    // OOF policy: one stable group per queue mode, including modes sharing the same NEX game_mode.
+    let group = mode;
+    tracing::debug!(pid, mode, group, "matchmaking group resolved");
+    let mut w = Writer::new();
+    w.u32(group);
+    Ok(w.into_bytes())
 }
 
 /// Run `f` under the matchmaking lock, then deliver the notifications it produced.
@@ -91,11 +109,10 @@ fn create_with_param(ctx: &mut Ctx, pid: u64, r: &mut Reader) -> Reply {
     let _additional = p.list(|r| r.pid())?;
     let _gid_check = p.u32()?;
     let _options = p.u32()?;
-    let _message = p.string()?;
+    let message = p.string()?;
     let count = p.u16()?;
-    let created = with_mm(ctx, |mm| {
-        (mm.create(pid, session, players(count), accounts::random_bytes::<32>().to_vec()), Vec::new())
-    });
+    let created =
+        with_mm(ctx, |mm| mm.create(pid, session, players(count), accounts::random_bytes::<32>().to_vec(), &message));
     tracing::info!(pid, gid = created.id, game_mode = created.game_mode, "session created");
     Ok(session_bytes(&created))
 }
@@ -138,7 +155,7 @@ fn auto_matchmake_with_param(ctx: &mut Ctx, pid: u64, r: &mut Reader) -> Reply {
         {
             return (s, notes);
         }
-        (mm.create(pid, session, count, key), Vec::new())
+        mm.create(pid, session, count, key, &message)
     });
     tracing::info!(pid, gid = result.id, players = result.participation_count, "auto matchmake");
     Ok(session_bytes(&result))
@@ -162,6 +179,37 @@ fn find_by_gids(ctx: &mut Ctx, r: &mut Reader) -> Reply {
     let mm = ctx.state.matchmaking.lock().expect("matchmaking lock");
     let found: Vec<_> = gids.iter().filter_map(|g| mm.get(*g).map(|g| g.session.clone())).collect();
     Ok(session_list(&found))
+}
+
+/// Arena ID alphabet: digits and capitals without the look-alikes 0/O, 1/I, 2/Z, 5/S, 8/B.
+const CODE_CHARS: &[u8] = b"34679ACDEFGHJKLMNPQRTUVWXY";
+
+fn fresh_code() -> String {
+    accounts::random_bytes::<5>().iter().map(|b| CODE_CHARS[*b as usize % CODE_CHARS.len()] as char).collect()
+}
+
+/// 109/55: `u32` gathering ID → `Struct{String code, DateTime}`; the creator shows the code as the Arena ID.
+fn arena_code(ctx: &mut Ctx, r: &mut Reader) -> Reply {
+    let gid = r.u32()?;
+    let mut mm = ctx.state.matchmaking.lock().expect("matchmaking lock");
+    let code = mm.code(gid, fresh_code).ok_or(Fail(errors::RENDEZVOUS_SESSION_VOID))?;
+    // shortcut: the DateTime's meaning is unknown (issue time or expiry); the creation time is sent.
+    let started = mm.get(gid).map_or(DateTime::now(), |g| g.session.started);
+    let mut w = Writer::new();
+    w.structure(0, |w| {
+        w.string(&code).u64(started.0);
+    });
+    Ok(w.into_bytes())
+}
+
+/// 109/56: `Struct{String code, DateTime}` (only the typed code is set) → `u32` gathering ID.
+fn find_by_code(ctx: &mut Ctx, r: &mut Reader) -> Reply {
+    let (_, mut p) = r.structure()?;
+    let code = p.string()?;
+    let gid = ctx.state.matchmaking.lock().expect("matchmaking lock").by_code(&code);
+    let mut w = Writer::new();
+    w.u32(gid.ok_or(Fail(errors::RENDEZVOUS_SESSION_VOID))?);
+    Ok(w.into_bytes())
 }
 
 fn find_by_owner(ctx: &mut Ctx, r: &mut Reader) -> Reply {
@@ -344,6 +392,30 @@ fn end_participation(ctx: &mut Ctx, pid: u64, r: &mut Reader) -> Reply {
 }
 
 /// Station URLs of the session host, so a joining Pia peer can reach it.
+/// The host's station is final once its NAT check replaced a station URL (`ReplaceURL` adds the Pia `CID`).
+fn host_station_ready(state: &crate::state::State, gid: u32) -> bool {
+    let Some(host) = state.matchmaking.lock().expect("matchmaking lock").get(gid).map(|g| g.session.host) else {
+        return true;
+    };
+    let sessions = state.sessions.read().expect("sessions lock");
+    sessions.get(&host).is_none_or(|s| {
+        s.urls.iter().any(|u| super::secure::StationUrl::parse(u).is_some_and(|u| u.get("CID").is_some()))
+    })
+}
+
+/// GetSessionURLs is answered once the host's station is final: a joiner asks right after matchmaking, often while
+/// the host is still in its NAT check, and Pia gives up on URLs without the host's `CID` (seen from 13.0.5: the
+/// joiner then fails `WaitGetStationConnection` without sending a datagram). Waits at most 10 s, then answers with
+/// what there is. shortcut: polls every 50 ms and holds this connection's other messages meanwhile; use a per-host
+/// notifier and a detached reply if that ever matters.
+pub async fn wait_for_host_station(state: &crate::state::State, body: &[u8]) {
+    let Ok(gid) = Reader::new(body).u32() else { return };
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !host_station_ready(state, gid) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 fn session_urls(ctx: &mut Ctx, r: &mut Reader) -> Reply {
     let gid = r.u32()?;
     let host = ctx
@@ -354,7 +426,9 @@ fn session_urls(ctx: &mut Ctx, r: &mut Reader) -> Reply {
         .get(gid)
         .map(|g| g.session.host)
         .ok_or(Fail(errors::RENDEZVOUS_SESSION_VOID))?;
-    let urls = ctx.state.sessions.read().expect("sessions lock").get(&host).map(|s| s.urls.clone()).unwrap_or_default();
+    let urls = ctx.state.sessions.read().expect("sessions lock").get(&host).map(|s| super::secure::peer_urls(&s.urls));
+    let urls = urls.unwrap_or_default();
+    tracing::debug!(gid, host, ?urls, "GetSessionURLs");
     let mut w = Writer::new();
     w.list(&urls, |w, u| {
         w.string(u);

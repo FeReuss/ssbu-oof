@@ -17,6 +17,42 @@ secret = "REPLACE_WITH_64_HEX_CHARACTERS_REPLACE_WITH_64_HEX_CHARACTERS_00"
 token_ttl_secs = 3600
 
 # NAT check server used by Pia for NAT detection (the game's nncs1/nncs2 hosts).
+# SQLite file for what must survive a restart: the players' DataStore records (SSBU keeps its online record in them,
+# including disconnects and conduct warnings). Omit it to keep them in memory only.
+database = "oof.db"
+
+# Development only: take each client's public address from the station URLs it registers instead of the address its
+# connections come from (several game instances on one machine, the MacNativeGames port's OOF_VIRTUAL_INDEX). Never
+# enable it on a public server: clients could claim any address.
+# trust_client_address = true
+
 [nat_check]
-primary = "0.0.0.0:10025"
-secondary = "0.0.0.0:10125"
+# nncs1 and nncs2: two different IPv4 addresses of this host, each serving UDP 10025 and 10125.
+# Pia needs both; the port reads them from GET /v1/status.
+primary = "203.0.113.1"
+secondary = "203.0.113.2"
+
+# Online services the game switches on from the server (Utility 110/7 GetIntegerSettings, index 0). The game checks
+# these keys before opening each online sequence and shows "service not available" when a key is not 1 (keys 9006 and
+# 9007 default to off: Online Tourney and Spectator). docs/re/protocols.md, "Service switches".
+[integer_settings.0]
+"9002" = 1
+"9003" = 1
+"9004" = 1
+"9006" = 1
+"9007" = 1
+"9011" = 1
+
+# Timed events (Utility 110/11): online tourneys and the online menu banner. `kinds` is a category bitmask (the menu
+# asks for 4, the tourney screen for 3); a tourney runs from times[1] and each period is one session the game shows and
+# lets players enter. Times are UTC. Layout and the parameter keys: docs/re/protocols.md, "Game events".
+# [[events]]
+# id = 1
+# kinds = 5
+# title = "Weekend tourney"
+# times = [2026-11-06T00:00:00Z, 2026-11-07T18:00:00Z, 2026-11-09T00:00:00Z, 2026-11-09T00:00:00Z]
+# params = { time_sec = 180, stock = 3, tournament_entry_max_seconds = 60 }
+# [[events.periods]]
+# id = 1
+# start = 2026-11-07T18:00:00Z
+# end = 2026-11-07T22:00:00Z

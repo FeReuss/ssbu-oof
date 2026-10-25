@@ -10,14 +10,17 @@ provide a handful of console services in a standard way ([docs/STANDARD.md](docs
 
 > Status: early. Login, secure connection, NAT traversal and the matchmaking core (Quickplay,
 > co-op, background matchmaking, Battle Arenas) are implemented and tested against a protocol-level
-> client; nothing has run against the real game yet. See [docs/PROGRESS.md](docs/PROGRESS.md).
+> client. The real game, through a native port, logs in and reaches the online menu; matchmaking
+> with the real game is not proven yet. See [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Features
 
 | Feature | Status |
 | --- | --- |
+| Accounts: user name + password (no e-mail/phone), device keys, bans, password change | implemented |
 | Login (ID token → Kerberos ticket → secure server) | implemented |
-| Quickplay / background matchmaking / online co-op | matchmaking core implemented; rule scoring todo |
+| Quickplay / background matchmaking / online co-op | full matches and rematches played with the real game; rule scoring todo |
+| Players' online records (DataStore, SQLite) | implemented |
 | Battle Arenas (create, browse, join, passwords, updates) | implemented, Arena ID todo |
 | NAT check + NAT traversal for Pia P2P | implemented (relay todo) |
 | Elite Smash (GSP), Online Tourneys, Spectator mode | reverse-engineered surface documented, server todo |
@@ -35,7 +38,10 @@ curl localhost:8080/v1/status
 ```
 
 - `GET /` — NEX WebSocket endpoint (subprotocol `NEX`) the game connects to through its port.
-- `POST /v1/accounts`, `POST /v1/token` — account and ID token for ports.
+- `POST /v1/accounts`, `/v1/login`, `/v1/token`, `/v1/logout`, `/v1/password` — accounts, device logins and ID
+  tokens for ports (docs/STANDARD.md §2).
+- `oof-server oof.toml account|ban|unban <user|pid> …` — administration on the server's database (a ban stops new
+  logins and disconnects the player within 30 s).
 - UDP 10025/10125 — NAT check for Pia.
 
 Run behind a TLS terminator for `wss://`. Logs: `RUST_LOG=debug` shows every unimplemented call the

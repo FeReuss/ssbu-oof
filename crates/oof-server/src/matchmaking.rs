@@ -216,7 +216,11 @@ impl SearchCriteria {
             && filter(&self.min_participants, s.min_participants as u32)
             && filter(&self.max_participants, s.max_participants as u32)
             && filter(&self.matchmake_system, s.matchmake_system)
-            && self.attribs.iter().enumerate().all(|(i, f)| s.attribs.get(i).is_none_or(|v| filter(f, *v)))
+            && self
+                .attribs
+                .iter()
+                .enumerate()
+                .all(|(i, f)| f.trim().is_empty() || s.attribs.get(i).is_some_and(|v| filter(f, *v)))
             && (!self.vacant_only || vacant >= needed.max(self.vacant_participants as u32).max(1))
             && (!self.exclude_locked || s.open_participation)
             && (!self.exclude_user_password || !s.user_password_enabled)
@@ -245,6 +249,8 @@ pub struct Gathering {
     /// (pid, players on that console): online co-op brings two players on one PID.
     pub participants: Vec<(u64, u32)>,
     pub system_password: String,
+    /// Arena ID players type to find this gathering (109/55, 109/56); empty until first asked for.
+    pub code: String,
 }
 
 impl Gathering {
@@ -267,6 +273,19 @@ pub enum JoinError {
 
 pub type Notices = Vec<(u64, Notification)>;
 
+/// 3001: param1 = gathering, param2 = participant (both read by Pia's handler, main+0xef5d0); Pia
+/// also reads a leading digit 1-4 of the text as the participant's player count.
+fn joined_note(gid: u32, pid: u64, message: &str, count: u32) -> Notification {
+    Notification {
+        source: pid,
+        kind: PARTICIPANT_JOINED,
+        param1: gid as u64,
+        param2: pid,
+        text: message.to_string(),
+        param3: count as u64,
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Matchmaking {
     gatherings: BTreeMap<u32, Gathering>,
@@ -282,18 +301,35 @@ impl Matchmaking {
         self.gatherings.get_mut(&gid)
     }
 
+    /// The Arena ID of `gid`, issued on first request from `fresh` and unique among live gatherings.
+    pub fn code(&mut self, gid: u32, mut fresh: impl FnMut() -> String) -> Option<String> {
+        if self.gatherings.get(&gid)?.code.is_empty() {
+            let code = std::iter::repeat_with(&mut fresh).find(|c| self.by_code(c).is_none())?;
+            self.gatherings.get_mut(&gid)?.code = code;
+        }
+        Some(self.gatherings[&gid].code.clone())
+    }
+
+    /// The gathering whose Arena ID is `code` (typed by a player, so case is ignored).
+    pub fn by_code(&self, code: &str) -> Option<u32> {
+        let code = code.trim();
+        self.gatherings.values().find(|g| !g.code.is_empty() && g.code.eq_ignore_ascii_case(code)).map(|g| g.session.id)
+    }
+
     pub fn len(&self) -> usize {
         self.gatherings.len()
     }
 
-    /// Register a new session owned and hosted by `pid` (who joins it with `players` players).
+    /// Register a new session owned and hosted by `pid` (who joins it with `players` players). The
+    /// creator is told about its own participation like any joiner (see `join`).
     pub fn create(
         &mut self,
         pid: u64,
         mut session: MatchmakeSession,
         players: u32,
         session_key: Vec<u8>,
-    ) -> MatchmakeSession {
+        message: &str,
+    ) -> (MatchmakeSession, Notices) {
         self.next_id = self.next_id.wrapping_add(1).max(1);
         while self.gatherings.contains_key(&self.next_id) {
             self.next_id = self.next_id.wrapping_add(1).max(1);
@@ -302,15 +338,23 @@ impl Matchmaking {
         session.owner = pid;
         session.host = pid;
         session.session_key = session_key;
+        // Pia's packet key (first 16 bytes): lets a developer decrypt a capture of a test match
+        tracing::trace!(gid = session.id, key = %session.session_key.iter().map(|b| format!("{b:02x}")).collect::<String>(), "session key");
         session.started = DateTime::now();
         if session.max_participants == 0 {
             session.max_participants = 8;
         }
-        let mut g = Gathering { session, participants: vec![(pid, players.max(1))], system_password: String::new() };
+        let mut g = Gathering {
+            session,
+            participants: vec![(pid, players.max(1))],
+            system_password: String::new(),
+            code: String::new(),
+        };
         g.recount();
         let out = g.session.clone();
         self.gatherings.insert(out.id, g);
-        out
+        let note = joined_note(out.id, pid, message, out.participation_count);
+        (out, vec![(pid, note)])
     }
 
     pub fn join(
@@ -341,15 +385,19 @@ impl Matchmaking {
         }
         g.participants.push((pid, players));
         g.recount();
-        let note = Notification {
-            source: pid,
-            kind: PARTICIPANT_JOINED,
-            param1: gid as u64,
-            param2: pid,
-            text: message.to_string(),
-            param3: g.session.participation_count as u64,
-        };
-        Ok((g.session.clone(), vec![(g.session.owner, note)]))
+        // Everyone in the session hears about the newcomer, the newcomer included: Pia's
+        // Nex{Create,Join}SessionJob::WaitNotification (main+0x1057a0) waits up to 10 s for a 3001
+        // naming each local player in this gathering before it starts the P2P session.
+        let note = joined_note(gid, pid, message, g.session.participation_count);
+        let mut notices: Notices = g.participants.iter().map(|(p, _)| (*p, note.clone())).collect();
+        // The newcomer also hears about everyone already there: Pia connects only to stations whose PID it saw in a
+        // 3001 for this gathering (NexConnectStationJob vtable+0x40 = main+0xf1db0 -> registry main+0xee8d0), else
+        // SendConnectionRequest fails right after the NAT traversal. Pia reads the count from the text's first digit.
+        for &(p, n) in g.participants.iter().filter(|(p, _)| *p != pid) {
+            let count = if (2..=4).contains(&n) { n.to_string() } else { String::new() };
+            notices.push((pid, joined_note(gid, p, &count, g.session.participation_count)));
+        }
+        Ok((g.session.clone(), notices))
     }
 
     /// First session matching any criteria with room for `players`, oldest first.
@@ -492,15 +540,28 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(mm.find_open(std::slice::from_ref(&crit), 10, 1, &[]), None);
-        let created = mm.create(10, session(2, 2), 1, vec![1; 32]);
+        let (created, notes) = mm.create(10, session(2, 2), 1, vec![1; 32], "");
         assert_eq!((created.owner, created.participation_count), (10, 1));
+        // the creator is told about itself (Pia waits for it before starting P2P)
+        assert_eq!(
+            notes.iter().map(|(to, n)| (*to, n.kind, n.param2)).collect::<Vec<_>>(),
+            [(10, PARTICIPANT_JOINED, 10)]
+        );
         // co-op pair (2 players) does not fit in a 2-player session that already has 1
         assert_eq!(mm.find_open(std::slice::from_ref(&crit), 20, 2, &[]), None);
         let gid = mm.find_open(std::slice::from_ref(&crit), 20, 1, &[]).unwrap();
         let (joined, notes) = mm.join(gid, 20, 1, "", "hi").unwrap();
         assert_eq!(joined.participation_count, 2);
-        assert_eq!(notes[0].0, 10);
-        assert_eq!(notes[0].1.kind, PARTICIPANT_JOINED);
+        // owner and joiner both hear that 20 joined this gathering, and the joiner hears that 10 is in it
+        let seen: Vec<_> = notes.iter().map(|(to, n)| (*to, n.kind, n.param1, n.param2)).collect();
+        assert_eq!(
+            seen,
+            [
+                (10, PARTICIPANT_JOINED, gid as u64, 20),
+                (20, PARTICIPANT_JOINED, gid as u64, 20),
+                (20, PARTICIPANT_JOINED, gid as u64, 10)
+            ]
+        );
         assert!(matches!(mm.join(gid, 30, 1, "", ""), Err(JoinError::Full)));
         // owner drops: ownership moves to 20, who is told twice (ownership + disconnect)
         let notes = mm.disconnect(10);
@@ -511,14 +572,34 @@ mod tests {
     }
 
     #[test]
+    fn explicit_group_filter_does_not_match_a_missing_attribute() {
+        let mut mm = Matchmaking::default();
+        let mut s = session(1, 2);
+        s.attribs.clear();
+        mm.create(10, s, 1, vec![1; 32], "");
+        let mut criteria = SearchCriteria { attribs: vec!["1".into()], ..Default::default() };
+        assert!(mm.browse(&criteria).is_empty());
+        criteria.attribs[0] = " ".into();
+        assert_eq!(mm.browse(&criteria).len(), 1);
+    }
+
+    #[test]
     fn passwords_and_filters() {
         let mut mm = Matchmaking::default();
         let mut s = session(1, 8);
         s.user_password_enabled = true;
         s.user_password = "1234".into();
-        let gid = mm.create(1, s, 1, Vec::new()).id;
+        let gid = mm.create(1, s, 1, Vec::new(), "").0.id;
         assert!(matches!(mm.join(gid, 2, 1, "0000", ""), Err(JoinError::WrongPassword)));
         assert!(mm.join(gid, 2, 1, "1234", "").is_ok());
+        // Arena IDs: stable once issued, unique, found case-insensitively
+        let mut next = ["AAAAA", "AAAAA", "BBBBB"].into_iter().map(String::from);
+        assert_eq!(mm.code(gid, || next.next().unwrap()).as_deref(), Some("AAAAA"));
+        assert_eq!(mm.code(gid, || unreachable!()).as_deref(), Some("AAAAA"));
+        let other = mm.create(3, session(1, 8), 1, Vec::new(), "").0.id;
+        assert_eq!(mm.code(other, || next.next().unwrap()).as_deref(), Some("BBBBB"));
+        assert_eq!((mm.by_code(" aaaaa"), mm.by_code("BBBBB"), mm.by_code("CCCCC")), (Some(gid), Some(other), None));
+        assert_eq!(mm.code(999, || unreachable!()), None);
         assert!(filter("", 9) && filter("4", 4) && !filter("4", 5) && filter("1,3", 2) && !filter("x", 1));
     }
 }

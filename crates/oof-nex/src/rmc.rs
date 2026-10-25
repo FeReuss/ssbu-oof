@@ -15,6 +15,7 @@ pub mod errors {
     pub const CORE_NOT_IMPLEMENTED: u32 = 0x8001_0002;
     pub const CORE_INVALID_ARGUMENT: u32 = 0x8001_000A;
     pub const CORE_ACCESS_DENIED: u32 = 0x8001_0006;
+    pub const DATASTORE_NOT_FOUND: u32 = 0x8069_0004;
     pub const RENDEZVOUS_INVALID_USERNAME: u32 = 0x8003_0064;
     pub const RENDEZVOUS_INVALID_PASSWORD: u32 = 0x8003_006B;
     pub const RENDEZVOUS_SESSION_VOID: u32 = 0x8003_0065;
@@ -22,6 +23,9 @@ pub mod errors {
     pub const RENDEZVOUS_SESSION_CLOSED: u32 = 0x8003_006E;
     pub const RENDEZVOUS_NOT_PARTICIPATED: u32 = 0x8003_006F;
     pub const RENDEZVOUS_PERMISSION_DENIED: u32 = 0x8003_0069;
+    /// `RendezVous::AccountDisabled` in the public NEX error table (kinnay/NintendoClients); the code the game shows
+    /// for it is not verified yet.
+    pub const RENDEZVOUS_ACCOUNT_DISABLED: u32 = 0x8003_0067;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

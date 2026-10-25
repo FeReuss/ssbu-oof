@@ -51,6 +51,11 @@ fn validate_and_request_ticket_with_param(ctx: &mut Ctx, r: &mut Reader) -> Repl
     };
     let pid = accounts::verify_token(&ctx.state.secret, &token, now_unix())
         .ok_or(Fail(errors::RENDEZVOUS_INVALID_PASSWORD))?;
+    // A token issued before a ban is still valid for its lifetime: the ban is checked here too.
+    if let Some(ban) = ctx.state.accounts.lock().expect("accounts lock").ban_of(pid, now_unix())? {
+        tracing::info!(pid, reason = ban.reason, until = ?ban.until, "NEX login refused: account banned");
+        return Err(Fail(errors::RENDEZVOUS_ACCOUNT_DISABLED));
+    }
     // The token proves the identity. The user name should be the decimal PID; where the game takes
     // it from on a port is not verified yet, so a mismatch is logged rather than refused.
     if username.parse::<u64>().ok() != Some(pid) {

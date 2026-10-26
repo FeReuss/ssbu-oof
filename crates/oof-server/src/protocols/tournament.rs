@@ -85,7 +85,7 @@ impl Tournaments {
     pub fn start(&mut self, id: u32) -> Option<(u8, Vec<u64>)> {
         let b = self.brackets.iter_mut().find(|b| b.id == id && b.matches.is_empty())?;
         let keys: Vec<u32> = (0..b.entrants.len() as u32).collect();
-        b.matches = keys.chunks(2).zip(1..).map(|(pair, id)| Match { id, round: 1, players: pair.to_vec() }).collect();
+        b.matches = keys.chunks(2).zip(0..).map(|(pair, id)| Match { id, round: 0, players: pair.to_vec() }).collect();
         b.phase += 1;
         let mut pids: Vec<u64> = b.entrants.iter().map(|e| e.pid).collect();
         pids.dedup();
@@ -137,7 +137,9 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             let (bracket, new) = ctx.state.tournaments.lock().expect("tournaments lock").enter(event, players);
             tracing::info!(pid, event, a, b, players = count, bracket, "tourney entry");
             announce(ctx.state, bracket, 0, &[pid]);
-            if new {
+            // shortcut: brackets do not start yet: with matches in 201/12 the game's bracket screen aborts
+            // (std::out_of_range, docs/PROGRESS.md "Next"); set OOF_TOURNEY_START=1 to reproduce it.
+            if new && std::env::var_os("OOF_TOURNEY_START").is_some() {
                 let state = Arc::clone(ctx.state);
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(entry_seconds)).await;
@@ -164,17 +166,8 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             tracing::debug!(id, entrants = bracket.entrants.len(), matches = bracket.matches.len(), "tourney info");
             let mut w = Writer::new();
             w.structure(0, |w| {
-                // experiment: OOF_TI="a,b,c,d" overrides u32 +0x10, u8 +0x14, u8 +0x15, u32 +0x18
-                let v: Vec<u32> = std::env::var("OOF_TI")
-                    .ok()
-                    .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect())
-                    .unwrap_or_default();
-                let f = |i: usize, d: u32| v.get(i).copied().unwrap_or(d);
-                w.u32(bracket.id)
-                    .u32(f(0, 0))
-                    .u8(f(1, bracket.phase.into()) as u8)
-                    .u8(f(2, 0) as u8)
-                    .u32(f(3, bracket.entrants.len() as u32));
+                // +0x14 is the phase: the game refetches only when a notification carries a higher one
+                w.u32(bracket.id).u32(0).u8(bracket.phase).u8(0).u32(bracket.entrants.len() as u32);
                 w.u32(bracket.matches.len() as u32);
                 for m in &bracket.matches {
                     w.u32(m.id).structure(0, |w| {

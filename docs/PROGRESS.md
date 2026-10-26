@@ -3,7 +3,7 @@
 Read this first in a new session. Keep it current: update "State" and "Next" whenever a milestone
 moves, and record dead ends so nobody repeats them.
 
-## State (2026-10-25)
+## State (2026-10-26)
 
 - **Reverse engineering** of SSBU 13.0.5's online stack: middleware versions, hosts, transport,
   every NEX client protocol with ID evidence and the methods the game links, request layouts for
@@ -78,9 +78,18 @@ moves, and record dead ends so nobody repeats them.
      Verified with the game (a Vault replay posted by one account, found and played by another). Open: how an unlike
      is reported, search by ID ("X Search"), posting stages / Mii fighters / spirit teams / videos (expected to be the
      same 24 + 62 flow with data types 3 / 0 / 1 / 4), deleting one's own posts, reporting content (Screening 124).
-   - Then: Spectator 115/54 (`C2ReplayBroadcastingInfo`): Quickplay matches upload nothing even with switches
-     9010-9015 on, so broadcasts most likely come from Elite Smash matches (needs Matchmake Referee first); tourney
-     brackets (201/10-14, response 12 layout open); Matchmake Referee 120.
+   - **Online Tourney in progress** (2026-10-26): entry (201/9), the tourney ID notification (type 201000, param1 ID,
+     param2 phase 0) and 201/12 with the entrants work with the game (docs/re/protocols.md, "Online Tourney"). The
+     server can pair entrants when the entry closes (`OOF_TOURNEY_START=1`, off by default) but any match in 201/12
+     makes the bracket screen abort. **Exact next step:** read the 201/12 completion handler `main+0x1737dd0` and the
+     bracket model it builds (round count, per-round match vectors, `main+0x239d150`) to learn which match fields are
+     the round and position; then the match flow (who creates the gathering, 201/14 with a u64 that is likely the
+     gathering ID, 201/13 results, 10/11). Dev scripts in the port's `SSBU_build/analysis/dev-scripts/`:
+     `nav_tourney.sh`, `tourney_pair.sh` (two instances enter one tourney).
+   - Spectator 115/54 (`C2ReplayBroadcastingInfo`): **not usable yet** (docs/features.md). Quickplay matches upload
+     nothing even with switches 9010-9015 on, so broadcasts most likely come from Elite Smash matches (needs Matchmake
+     Referee first). Tests need three instances (two fight, one watches; authorized by the maintainer).
+   - Then Elite Smash: Matchmake Referee 120 (1/3/4/12/14 layouts in "Request layouts"), Smash power.
    - Tools: `tools/re/readers.py` decodes response readers (the counterpart of `ddl.py`); an approximation, check
      surprising results by hand.
    Pitfalls: the game ends Quickplay matches of idle/attack-in-place/self-destructing players (test inputs must move);

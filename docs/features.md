@@ -98,7 +98,8 @@ so the uploads most likely come from Elite Smash matches.
 
 To do: Elite Smash first (Matchmake Referee 120, Smash power), then find which call uploads a broadcast replay, store
 it like Shared Content (`/v1/objects`), answer 115/54 with the latest broadcasts, and the related calls the game makes
-while watching (predictions, rewards).
+while watching (predictions, rewards). Testing it takes three game instances on one Mac (two fight, one watches; one
+fighter may run without GPU submission).
 
 ## Shared Content
 

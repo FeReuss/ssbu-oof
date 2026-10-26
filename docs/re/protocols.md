@@ -311,14 +311,35 @@ strings): `operation_id`, `amiibo`, `team`, `melee_kind`, `melee_rule`, `time_se
 `competition_stage_type`, `item_flags`, `prize_type`, `prize_index`, `prize_value`, `prize_param0`, `prize_param1`.
 Their values' meanings are not established yet.
 
-## Online Tourney: Tournament 201 (2026-10-25)
+## Online Tourney: Tournament 201 (2026-10-25, 2026-10-26)
 
 Entering a tourney (fighter chosen, +) sends **201/9**: `Struct{u64 event id, u32, u16, List<Struct{u8 fighter,
 u8 costume, u8, String name, qBuffer, qBuffer, qBuffer}>}`; seen `1, 1500, 80, [{6 (Kirby), 0, 0, "oofdev1", -, -, -}]`
-(one entry per local player). Responses (extractors `main+0x2b1be0..0x2b1f40`): 9, 10, 11, 13 and 14 return a `u32`;
-12 returns `Struct{u32, u32, u8, u32, List<A>, List<B>}` (element readers `main+0x2b0fb0`, `main+0x2b1740`; likely
-`TournamentMatchInfo` and `TournamentPlayerInfo`, not yet decoded). Without a 201/9 answer the game returns to the
-online menu.
+(one entry per local player). 9, 10, 11, 13 and 14 return a `u32` (extractors `main+0x2b1be0..0x2b1f40`). After 9 the
+game waits in the "searching for rivals" stage; `tournament_entry_max_seconds` (60) is the countdown shown.
+
+**The game learns its tourney only from notifications.** Its handler (`main+0x171f9d0`) accepts NotificationEvent types
+201000-201999 (category 201; subtype ignored): param1 = the tourney ID, param2's low byte = a phase. With no tourney
+yet it takes only phase 0; afterwards only the same ID. Entering (`main+0x1736f20`) clears both (ID 0, phase 0xFF), so
+the 9 response alone does nothing. The tourney sequence (`main+0x16c3cd0`) compares the phase with the last one it saw
+and, when it grows, fetches the tourney again. Requests 10-14 all send `Struct{u32 tourney ID}` (13: `{u32, u32}`,
+14: `{u32, u32, u32, u64}`) built by the request switch at `main+0x1736cd0` (kinds 0-5 → 9, 10/11, 12, 11, 13, 14).
+
+**201/12** (sent after each phase notification), response `TournamentInfo` (reader `main+0x2b03a0`): `Struct{u32 ID,
+u32, u8 phase, u8, u32, Map<u32, TournamentMatchInfo>, Map<u32, TournamentPlayerInfo>}` — both containers are maps (a
+`u32` key before each structure; readers `main+0x2b0660`, `main+0x2b0870`).
+- `TournamentMatchInfo` (`main+0x2b0fb0`): `Struct{u32, u32, u8, u8, u8, List<u32>, u8, u64}`.
+- `TournamentPlayerInfo` (`main+0x2b1740`): `Struct{u32, u64 PID, u32, u16, u8, u8, u8, List<entry as in 9>}`.
+- A wrong layout shows error 2306-0116. If `+0x14` (phase) already equals the next notification's phase, the game does
+  not refetch.
+
+Verified: phase 0 notification → 201/12 with the entrants and no matches → no error, the game keeps waiting. **Open:**
+with one match (players' keys 0 and 1, any of the tried values for the match's first two `u32`s and for TournamentInfo's
+`u32`s), the bracket screen aborts both games with `std::out_of_range` (empty vector reaching `main+0x1d0e590`, from
+`main+0x1d07cb4`). The screen's round index is computed by `main+0x239d150` from the game's bracket model (round count
+at `+4`, one 0x18-byte vector of matches per round; scene field `+0x2a8` set at `main+0x18ba01c`). The model is built
+after 201/12 by the completion handler registered at `main+0x17379f8` (`main+0x1737dd0`); reading it gives the meaning
+of the match fields (round, position) and of TournamentInfo's `u32`s.
 
 ## Spectator: DataStore 115/54 (2026-10-25)
 

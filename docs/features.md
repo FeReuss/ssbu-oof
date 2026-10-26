@@ -86,14 +86,26 @@ sessions, rewards as event results.
 
 ## Spectator mode
 
-Client (hypothesis from type names, to confirm): the `C2ReplayBroadcastingInfo` type plus DataStore
-upload/download suggest matches are recorded by the players' consoles and published through
-DataStore, so spectators replay them with a delay and predictions are scored against the result.
+**Not usable yet: watching online matches in Spectator does not work with ssbu-oof.** With switch 9007 on, the menu
+entry opens and the game asks DataStore 115/54 (no parameters) for a `C2ReplayBroadcastingInfo`; the server has no
+broadcasts to give, and the game shows that it could not show the replay.
 
-Server: **todo.** Needs DataStore (115) with HTTP object storage (prepare-post/complete-post,
-prepare-get) and the SSBU custom DataStore methods that list broadcasts.
+What is known (docs/re/protocols.md, "Spectator"): the response is read by `main+0x2970b0` (lists of entries that hold
+a `DataStoreMetaInfo`-like object, fighters, a download descriptor and dates), so broadcasts are replays stored in
+DataStore and downloaded like Shared Content. No match uploads one so far: Quickplay matches post only the players'
+records (115/82, 21, 38), also with switches 9010-9015 on. In the original game Spectator showed Elite Smash battles,
+so the uploads most likely come from Elite Smash matches.
+
+To do: Elite Smash first (Matchmake Referee 120, Smash power), then find which call uploads a broadcast replay, store
+it like Shared Content (`/v1/objects`), answer 115/54 with the latest broadcasts, and the related calls the game makes
+while watching (predictions, rewards).
+
+## Shared Content
+
+**Works** (2026-10-26): posting a Vault replay, browsing per tab, downloading and playing it, likes. Open: search by
+ID, posting stages, Mii fighters, spirit teams and videos (expected to be the same flow), deleting one's posts,
+reporting (Screening 124). Details: docs/re/protocols.md, "Shared Content".
 
 ## Not requested but on the same stack
 
-Shared Content (stages, Mii fighters, replays: DataStore), reporting (Screening 124), Smash World
-uploads (DataStore). All share the DataStore milestone.
+Smash World uploads (DataStore).

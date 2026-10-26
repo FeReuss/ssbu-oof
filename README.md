@@ -21,9 +21,12 @@ provide a handful of console services in a standard way ([docs/STANDARD.md](docs
 | Login (ID token → Kerberos ticket → secure server) | implemented |
 | Quickplay / background matchmaking / online co-op | full matches and rematches played with the real game; rule scoring todo |
 | Players' online records (DataStore, SQLite) | implemented |
-| Battle Arenas (create, browse, join, passwords, updates) | implemented, Arena ID todo |
-| NAT check + NAT traversal for Pia P2P | implemented (relay todo) |
-| Elite Smash (GSP), Online Tourneys, Spectator mode | reverse-engineered surface documented, server todo |
+| Battle Arenas (create, browse, join, passwords, updates, Arena ID) | implemented |
+| NAT check + NAT traversal for Pia P2P | implemented (SSBU 13.0.5 has no relay to serve) |
+| Shared Content (post, browse, download, likes) | replays verified with the real game; other content types todo |
+| Online Tourneys | entry and tourney info work; brackets and matches in progress |
+| Spectator mode (watching online matches) | **not working yet**: needs Elite Smash and the broadcast uploads |
+| Elite Smash (GSP) | reverse-engineered surface documented, server todo |
 
 Details per feature: [docs/features.md](docs/features.md). Protocol findings:
 [docs/re/protocols.md](docs/re/protocols.md).

@@ -164,7 +164,17 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             tracing::debug!(id, entrants = bracket.entrants.len(), matches = bracket.matches.len(), "tourney info");
             let mut w = Writer::new();
             w.structure(0, |w| {
-                w.u32(bracket.id).u32(0).u8(bracket.phase).u8(0).u32(bracket.entrants.len() as u32);
+                // experiment: OOF_TI="a,b,c,d" overrides u32 +0x10, u8 +0x14, u8 +0x15, u32 +0x18
+                let v: Vec<u32> = std::env::var("OOF_TI")
+                    .ok()
+                    .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect())
+                    .unwrap_or_default();
+                let f = |i: usize, d: u32| v.get(i).copied().unwrap_or(d);
+                w.u32(bracket.id)
+                    .u32(f(0, 0))
+                    .u8(f(1, bracket.phase.into()) as u8)
+                    .u8(f(2, 0) as u8)
+                    .u32(f(3, bracket.entrants.len() as u32));
                 w.u32(bracket.matches.len() as u32);
                 for m in &bracket.matches {
                     w.u32(m.id).structure(0, |w| {

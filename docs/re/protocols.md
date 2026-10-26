@@ -388,9 +388,13 @@ across rounds (the node at round r, position p is `first ID + nodes in earlier r
 **round** (the layout choice counts only matches with 0 there); `+9` = second `u8`, the **state** (`5` = finished, only
 then is a winner set); `+0x28` the player keys. For a finished match the winner is the node player whose entry field
 `+0x81c` (0x820-byte entries built from TournamentPlayerInfo) equals a value taken from `seq+0x54c` for the first
-match, else from the keys of the match named by the entry's `+4` (the second `u32`). **Open:** which TournamentPlayerInfo
-field becomes `+0x81c` and what `seq+0x54c` holds; then announce phase 1 with round 1 finished (state 5) and the
-round-2 matches.
+match, else from the keys of the match named by the entry's `+4` (the second `u32`). The sequence's player entries
+(0x330 bytes, `seq+0x568`) are found by their first `u32`, which must equal the keys in the match lists (TournamentPlayerInfo's
+first `u32`); the builder copies it to both `+0x818` and `+0x81c` (`main+0x172b750`, `main+0x23808e0..0x23808f8`), so the
+winner is a **player key**: `[seq+0x54c]` for the first match, else a key shared with the match named by `+4`.
+Hypothesis to test: `seq+0x54c` is TournamentInfo's last `u32` (sent as the entrant count so far) and means the asking
+player's own key, the match vector being that player's path (`+4` linking a match to the one it came from). Then
+announce phase 1 with round 1 finished (state 5) and the round-2 matches.
 
 ## Spectator: DataStore 115/54 (2026-10-25)
 

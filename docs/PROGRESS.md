@@ -63,7 +63,8 @@ moves, and record dead ends so nobody repeats them.
 0. **Order requested by the user (2026-10-26):** (1) friends, relay for strict NAT, matchmaking by rules / Smash level;
    (2) Spectator and Shared Content (DataStore uploads over HTTP); (3) Online Tourneys; (4) Elite Smash (Matchmake
    Referee, Smash level).
-   - Done: Battle Arenas (Arena ID 109/55/56, verified with two instances); friends (accounts, `/v1/friends*`,
+   - Done: persistence of player records (SQLite, `database = "oof.db"` in `oof.example.toml`; test
+     `objects_survive_a_restart`; dev configs without `database` stay in memory on purpose); Battle Arenas (Arena ID 109/55/56, verified with two instances); friends (accounts, `/v1/friends*`,
      standard v0.2 section 7; friends' arenas verified with the game); service switches (integer settings
      9002-9011: Online Tourney and Spectator are off without them); game events (`[[events]]`); Tournament 201/9
      entry. Level/rule matching needs nothing more from the server (the client sends exact attributes; brackets

@@ -2,7 +2,8 @@
 //!
 //! The game learns which tourney it is in, and every change to it, only from notifications of type 201xxx (param1 the
 //! tourney ID, param2 a phase that only grows; `main+0x171f9d0`). Each new phase makes it fetch the tourney again
-//! (201/12). The first notification must carry phase 0.
+//! (201/12). The first notification (phase 0) is sent when the entry closes: the game fixes the bracket layout from the
+//! first TournamentInfo it reads (player count and players per match), so that one must already hold the matches.
 
 use super::{Ctx, Fail, NOT_IMPLEMENTED, Reply};
 use crate::state::State;
@@ -10,7 +11,7 @@ use oof_nex::rmc::errors;
 use oof_nex::stream::{Reader, Writer};
 use std::sync::Arc;
 
-/// One player entered from a console (201/9 lists every local player).
+/// One player entered from a console (201/9 lists every local player), or an empty seat (`pid` 0).
 #[derive(Debug, Clone)]
 pub struct Entrant {
     pub pid: u64,
@@ -46,8 +47,12 @@ pub struct Tournaments {
     next_id: u32,
 }
 
-/// Entrants per bracket ("a battle for victory among 64 players" on the tourney screen).
-const BRACKET_SIZE: usize = 64;
+/// Players per match. The game picks the bracket layout from the largest player list among the matches.
+/// shortcut: 1v1 brackets only; 4-player ones (8/16/32/64 players) once the event setting that selects them is known.
+const PER_MATCH: usize = 2;
+/// Bracket sizes the game has a 1v1 layout for (`main+0x239d810`; docs/re/protocols.md, "Online Tourney").
+const SIZES: [usize; 3] = [8, 16, 32];
+const BRACKET_SIZE: usize = SIZES[SIZES.len() - 1];
 /// Seconds the entry stays open when the event does not set `tournament_entry_max_seconds` (the game's default).
 const ENTRY_SECONDS: u64 = 60;
 /// Notification type the game watches for tourney changes (category 201, the protocol).
@@ -79,17 +84,49 @@ impl Tournaments {
         self.brackets.iter().find(|b| b.id == id)
     }
 
-    /// Close the entry of bracket `id`: pair its entrants in entry order for round 1 (an odd one out plays alone)
-    /// and move to the next phase. Returns the new phase and the PIDs to tell.
-    /// shortcut: one round; later rounds, results and byes come once the game's reports (201/13, 201/14) are decoded.
-    pub fn start(&mut self, id: u32) -> Option<(u8, Vec<u64>)> {
-        let b = self.brackets.iter_mut().find(|b| b.id == id && b.matches.is_empty())?;
-        let keys: Vec<u32> = (0..b.entrants.len() as u32).collect();
-        b.matches = keys.chunks(2).zip(0..).map(|(pair, id)| Match { id, round: 0, players: pair.to_vec() }).collect();
-        b.phase += 1;
+    /// Close the entry of bracket `id`: fill it up to a size the game has a layout for with empty seats (every round-1
+    /// match needs players, an empty one aborts the game's bracket screen) and pair seats in entry order, so entrants
+    /// meet each other first. Returns the PIDs to tell.
+    /// shortcut: round 1 only; later rounds and results once the game's result report is decoded.
+    pub fn start(&mut self, id: u32) -> Option<Vec<u64>> {
+        let b = self.brackets.iter_mut().find(|b| b.id == id && b.matches.is_empty() && !b.entrants.is_empty())?;
+        let size = SIZES.into_iter().find(|&s| s >= b.entrants.len()).unwrap_or(BRACKET_SIZE);
         let mut pids: Vec<u64> = b.entrants.iter().map(|e| e.pid).collect();
         pids.dedup();
-        Some((b.phase, pids))
+        b.entrants.resize_with(size, Entrant::empty_seat);
+        let keys: Vec<u32> = (0..size as u32).collect();
+        b.matches = keys
+            .chunks(PER_MATCH)
+            .zip(0..)
+            .map(|(seats, id)| Match { id, round: 0, players: seats.to_vec() })
+            .collect();
+        Some(pids)
+    }
+
+    /// 201/11: leave tourney `id`. Before the start the seat is freed; afterwards it stays (the player is absent).
+    pub fn leave(&mut self, id: u32, pid: u64) {
+        if let Some(b) = self.brackets.iter_mut().find(|b| b.id == id && b.matches.is_empty()) {
+            b.entrants.retain(|e| e.pid != pid);
+        }
+    }
+
+    /// The other players of `pid`'s round-1 match in its latest started bracket (Online Tourney matchmaking, game mode
+    /// 12, pairs only them).
+    pub fn opponents(&self, pid: u64) -> Option<Vec<u64>> {
+        let b =
+            self.brackets.iter().rev().find(|b| !b.matches.is_empty() && b.entrants.iter().any(|e| e.pid == pid))?;
+        let seat = b.entrants.iter().position(|e| e.pid == pid)? as u32;
+        let m = b.matches.iter().find(|m| m.players.contains(&seat))?;
+        Some(m.players.iter().map(|&k| b.entrants[k as usize].pid).filter(|&p| p != pid && p != 0).collect())
+    }
+}
+
+impl Entrant {
+    /// A seat nobody took: no player, an entry with fighter 0 and no name.
+    fn empty_seat() -> Self {
+        let mut w = Writer::new();
+        w.u8(0).u8(0).u8(0).string("").qbuffer(&[]).qbuffer(&[]).qbuffer(&[]);
+        Entrant { pid: 0, fighter: 0, costume: 0, name: String::new(), raw: w.into_bytes() }
     }
 }
 
@@ -136,17 +173,15 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             let count = players.len();
             let (bracket, new) = ctx.state.tournaments.lock().expect("tournaments lock").enter(event, players);
             tracing::info!(pid, event, a, b, players = count, bracket, "tourney entry");
-            announce(ctx.state, bracket, 0, &[pid]);
-            // shortcut: brackets do not start yet: with matches in 201/12 the game's bracket screen aborts
-            // (std::out_of_range, docs/PROGRESS.md "Next"); set OOF_TOURNEY_START=1 to reproduce it.
-            if new && std::env::var_os("OOF_TOURNEY_START").is_some() {
+            // the entry stays open as long as the game counts down (tournament_entry_max_seconds), then phase 0
+            if new {
                 let state = Arc::clone(ctx.state);
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(entry_seconds)).await;
                     let started = state.tournaments.lock().expect("tournaments lock").start(bracket);
-                    if let Some((phase, pids)) = started {
-                        tracing::info!(bracket, phase, players = pids.len(), "tourney started");
-                        announce(&state, bracket, phase, &pids);
+                    if let Some(pids) = started {
+                        tracing::info!(bracket, players = pids.len(), "tourney started");
+                        announce(&state, bracket, 0, &pids);
                     }
                 });
             }
@@ -157,7 +192,8 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
         // Struct{u32 tourney ID} -> TournamentInfo{u32, u32, u8, u8, u32, Map<u32, TournamentMatchInfo{u32, u32, u8, u8,
         // u8, List<u32>, u8, u64}>, Map<u32, TournamentPlayerInfo{u32, u64 PID, u32, u16, u8, u8, u8, List<entry as in
         // 9>}>} (readers main+0x2b03a0, 0x2b0fb0, 0x2b1740). Asked after every tourney notification.
-        // shortcut: the meaning of most fields is not known yet; matches carry their ID, round and players' keys.
+        // shortcut: the meaning of most fields is not known yet; matches carry their ID, round and players' keys. The game
+        // seats round-1 players by key order whatever the matches say (docs/re/protocols.md).
         12 => {
             let (_, mut p) = r.structure()?;
             let id = p.u32()?;
@@ -190,6 +226,21 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             });
             Ok(w.into_bytes())
         }
+        // 11: leave the tourney, Struct{u32 tourney ID} -> u32 (kind 1 of the request switch main+0x1736cd0 sends 10, by
+        // event, before the tourney ID is known). 13: Struct{u32 tourney ID, u32 (1 in round 1)} -> u32, sent ~10 s after
+        // the match's mesh is complete: 1 starts the match, 0 makes both players leave (verified with the game).
+        11 | 13 => {
+            let (_, mut p) = r.structure()?;
+            let id = p.u32()?;
+            let arg = if method == 13 { Some(p.u32()?) } else { None };
+            tracing::info!(pid, method, id, arg, "tourney call");
+            if method == 11 {
+                ctx.state.tournaments.lock().expect("tournaments lock").leave(id, pid);
+            }
+            let mut w = Writer::new();
+            w.u32(u32::from(method == 13));
+            Ok(w.into_bytes())
+        }
         _ => Err(NOT_IMPLEMENTED),
     }
 }
@@ -211,23 +262,39 @@ mod tests {
         assert_ne!(t.enter(2, player(12)).0, first); // another event, another bracket
         assert_eq!(t.enter(1, player(10)).0, first); // entering again does not count twice
         assert_eq!(t.get(first).unwrap().entrants.len(), 2);
-        for pid in 100..162 {
+        for pid in 100..130 {
             assert_eq!(t.enter(1, player(pid)).0, first);
         }
-        assert_ne!(t.enter(1, player(200)).0, first); // 64 entrants: the next one opens a new bracket
+        assert_ne!(t.enter(1, player(200)).0, first); // 32 entrants: the next one opens a new bracket
     }
 
     #[test]
-    fn starting_pairs_entrants_and_closes_the_entry() {
+    fn starting_fills_a_layout_size_and_pairs_entrants_first() {
         let mut t = Tournaments::default();
         let (id, _) = t.enter(1, player(10));
         t.enter(1, player(11));
         t.enter(1, player(12));
-        let (phase, pids) = t.start(id).unwrap();
-        assert_eq!((phase, pids), (1, vec![10, 11, 12]));
-        let players: Vec<_> = t.get(id).unwrap().matches.iter().map(|m| m.players.clone()).collect();
-        assert_eq!(players, vec![vec![0, 1], vec![2]]);
+        assert_eq!(t.start(id).unwrap(), vec![10, 11, 12]);
+        let b = t.get(id).unwrap();
+        assert_eq!(b.entrants.len(), 8, "the smallest 1v1 layout has 8 players");
+        let players: Vec<_> = b.matches.iter().map(|m| m.players.clone()).collect();
+        assert_eq!(players, vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7]]);
+        assert_eq!(t.opponents(10), Some(vec![11]));
+        assert_eq!(t.opponents(12), Some(vec![]), "an empty seat is nobody to wait for");
         assert!(t.start(id).is_none(), "started twice");
         assert_ne!(t.enter(1, player(13)).0, id, "entered a started bracket");
+    }
+
+    #[test]
+    fn leaving_frees_the_seat_only_before_the_start() {
+        let mut t = Tournaments::default();
+        let (id, _) = t.enter(1, player(10));
+        t.enter(1, player(11));
+        t.leave(id, 11);
+        assert_eq!(t.get(id).unwrap().entrants.len(), 1);
+        t.enter(1, player(11));
+        t.start(id);
+        t.leave(id, 11);
+        assert_eq!(t.opponents(10), Some(vec![11]), "a started bracket keeps the seat");
     }
 }

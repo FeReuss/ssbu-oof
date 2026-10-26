@@ -400,14 +400,15 @@ impl Matchmaking {
         Ok((g.session.clone(), notices))
     }
 
-    /// First session matching any criteria with room for `players`, oldest first.
-    pub fn find_open(&self, criteria: &[SearchCriteria], pid: u64, players: u32, exclude: &[u64]) -> Option<u32> {
+    /// First session matching any criteria with room for `players`, oldest first; with `only`, one whose participants
+    /// are all in that list.
+    pub fn find_open(&self, criteria: &[SearchCriteria], pid: u64, players: u32, only: Option<&[u64]>) -> Option<u32> {
         self.gatherings
             .values()
             .filter(|g| g.session.open_participation && !g.has(pid))
             .filter(|g| !g.session.user_password_enabled && !g.session.system_password_enabled)
             .filter(|g| g.session.participation_count + players.max(1) <= g.session.max_participants as u32)
-            .filter(|g| !g.participants.iter().any(|(p, _)| exclude.contains(p)))
+            .filter(|g| only.is_none_or(|o| g.participants.iter().all(|(p, _)| o.contains(p))))
             .find(|g| criteria.is_empty() || criteria.iter().any(|c| c.matches(g, players)))
             .map(|g| g.session.id)
     }
@@ -539,7 +540,7 @@ mod tests {
             vacant_only: true,
             ..Default::default()
         };
-        assert_eq!(mm.find_open(std::slice::from_ref(&crit), 10, 1, &[]), None);
+        assert_eq!(mm.find_open(std::slice::from_ref(&crit), 10, 1, None), None);
         let (created, notes) = mm.create(10, session(2, 2), 1, vec![1; 32], "");
         assert_eq!((created.owner, created.participation_count), (10, 1));
         // the creator is told about itself (Pia waits for it before starting P2P)
@@ -548,8 +549,8 @@ mod tests {
             [(10, PARTICIPANT_JOINED, 10)]
         );
         // co-op pair (2 players) does not fit in a 2-player session that already has 1
-        assert_eq!(mm.find_open(std::slice::from_ref(&crit), 20, 2, &[]), None);
-        let gid = mm.find_open(std::slice::from_ref(&crit), 20, 1, &[]).unwrap();
+        assert_eq!(mm.find_open(std::slice::from_ref(&crit), 20, 2, None), None);
+        let gid = mm.find_open(std::slice::from_ref(&crit), 20, 1, None).unwrap();
         let (joined, notes) = mm.join(gid, 20, 1, "", "hi").unwrap();
         assert_eq!(joined.participation_count, 2);
         // owner and joiner both hear that 20 joined this gathering, and the joiner hears that 10 is in it

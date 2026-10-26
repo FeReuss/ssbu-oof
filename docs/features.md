@@ -80,9 +80,13 @@ Client: the Tournament protocol (201, SSBU-only; methods 9–14 sent, 15 underst
 `GetGameEvents` for the schedule, communities (Matchmake Extension 17–22, 54: persistent gatherings)
 for tourney lobbies, `TournamentMatchInfo` / `TournamentPlayerInfo` types for brackets.
 
-Server: **todo.** Utility 11 answers an empty event list (no tourneys scheduled). Next: decode the
-Tournament responses (extractor tables), model events → communities → bracket rounds of matchmake
-sessions, rewards as event results.
+Server: **partial (round 1 playable).** Events come from the config (`[[events]]`, Utility 11; switch 9006 on). Entering
+(201/9) puts the player in the event's open bracket; when the entry countdown ends the server fills the bracket to 8,
+16 or 32 seats (empty seats for the rest), pairs seats in entry order and announces phase 0; the game shows the bracket,
+matchmakes (game mode 12, the server pairs only the match's players), asks 201/13 (answered 1) and the match is played.
+Verified with two instances (2026-10-26). Gaps: after the match the game goes back to the tourney's fighter select:
+results, later rounds, byes against empty seats, rewards and 4-player brackets are not done (docs/re/protocols.md,
+"Online Tourney", "Open").
 
 ## Spectator mode
 

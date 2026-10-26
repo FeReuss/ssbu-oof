@@ -137,6 +137,9 @@ fn join_with_param(ctx: &mut Ctx, pid: u64, r: &mut Reader) -> Reply {
     Ok(session_bytes(&joined))
 }
 
+/// Game mode of an Online Tourney match's gathering (seen from the game, 109/40 after the bracket shows).
+const TOURNEY_GAME_MODE: u32 = 12;
+
 /// Quickplay / Elite Smash / background matchmaking: join the first compatible session, or open one.
 fn auto_matchmake_with_param(ctx: &mut Ctx, pid: u64, r: &mut Reader) -> Reply {
     let (_, mut p) = r.structure()?;
@@ -155,9 +158,12 @@ fn auto_matchmake_with_param(ctx: &mut Ctx, pid: u64, r: &mut Reader) -> Reply {
         criteria = ?criteria.iter().map(|c| (&c.game_mode, &c.attribs)).collect::<Vec<_>>(),
         "auto matchmake request"
     );
+    // Online Tourney matches (game mode 12) send no distinguishing attributes: pair each bracket match's players only
+    let only = (session.game_mode == TOURNEY_GAME_MODE)
+        .then(|| ctx.state.tournaments.lock().expect("tournaments lock").opponents(pid).unwrap_or_default());
     let key = accounts::random_bytes::<32>().to_vec();
     let result = with_mm(ctx, |mm| {
-        if let Some(gid) = mm.find_open(&criteria, pid, count, &[])
+        if let Some(gid) = mm.find_open(&criteria, pid, count, only.as_deref())
             && let Ok((s, notes)) = mm.join(gid, pid, count, "", &message)
         {
             return (s, notes);

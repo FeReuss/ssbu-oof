@@ -78,14 +78,19 @@ moves, and record dead ends so nobody repeats them.
      Verified with the game (a Vault replay posted by one account, found and played by another). Open: how an unlike
      is reported, search by ID ("X Search"), posting stages / Mii fighters / spirit teams / videos (expected to be the
      same 24 + 62 flow with data types 3 / 0 / 1 / 4), deleting one's own posts, reporting content (Screening 124).
-   - **Online Tourney in progress** (2026-10-26): entry (201/9), the tourney ID notification (type 201000, param1 ID,
-     param2 phase 0) and 201/12 with the entrants work with the game (docs/re/protocols.md, "Online Tourney"). The
-     server can pair entrants when the entry closes (`OOF_TOURNEY_START=1`, off by default) but any match in 201/12
-     makes the bracket screen abort. **Exact next step:** read the 201/12 completion handler `main+0x1737dd0` and the
-     bracket model it builds (round count, per-round match vectors, `main+0x239d150`) to learn which match fields are
-     the round and position; then the match flow (who creates the gathering, 201/14 with a u64 that is likely the
-     gathering ID, 201/13 results, 10/11). Dev scripts in the port's `SSBU_build/analysis/dev-scripts/`:
-     `nav_tourney.sh`, `tourney_pair.sh` (two instances enter one tourney).
+   - **Online Tourney: round 1 is playable** (2026-10-26, later): the bracket screen abort is fixed (the game takes the
+     bracket layout from the first TournamentInfo, so phase 0 is now announced when the entry closes, with 8/16/32 seats
+     and the matches; empty seats fill the rest), tourney matchmaking (game mode 12) pairs only a match's players, and
+     201/13 answered 1 starts the match (docs/re/protocols.md, "Online Tourney"). **Exact next step:** find what the game
+     needs after a match: it posts its record (115/21 or 38), leaves the gathering and sends 201/11 `{tourney ID}`
+     (answered 0 → back to the fighter select). Try answering 201/11 with 1/2, then read the code that consumes the
+     answer (request `+0x144`, kinds 3/5 in `main+0x1736cd0`) and what makes the game send 201/14; results then feed the
+     next round (new phase, nodes' winner key `+0x50`). Dev scripts in the port's `SSBU_build/analysis/dev-scripts/`:
+     `tourney_pair.sh <run>` (two instances enter; no server variable needed now), `tourney_fight.sh <run> [s]`
+     (`SUICIDE=1`: b walks off, use `stock = 1`), `tourney_watch.sh` + `watch_trace.py`/`bracket_dump.py`/`step_trace.py`
+     (LLDB on instance a). Pitfalls: idle-interrupted matches give the test accounts a temporary online ban stored in
+     their slot-0 record (`analysis/oof-share.db`, data type 16; delete those rows); kill earlier instances first (they
+     live 25 min); input-file key holds are capped at 5000 ms (use `down`/`up`).
    - Spectator 115/54 (`C2ReplayBroadcastingInfo`): **not usable yet** (docs/features.md). Quickplay matches upload
      nothing even with switches 9010-9015 on, so broadcasts most likely come from Elite Smash matches (needs Matchmake
      Referee first). Tests need three instances (two fight, one watches; authorized by the maintainer).

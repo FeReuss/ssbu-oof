@@ -333,13 +333,49 @@ u32, u8 phase, u8, u32, Map<u32, TournamentMatchInfo>, Map<u32, TournamentPlayer
 - A wrong layout shows error 2306-0116. If `+0x14` (phase) already equals the next notification's phase, the game does
   not refetch.
 
-Verified: phase 0 notification → 201/12 with the entrants and no matches → no error, the game keeps waiting. **Open:**
-with one match (players' keys 0 and 1, any of the tried values for the match's first two `u32`s and for TournamentInfo's
-`u32`s), the bracket screen aborts both games with `std::out_of_range` (empty vector reaching `main+0x1d0e590`, from
-`main+0x1d07cb4`). The screen's round index is computed by `main+0x239d150` from the game's bracket model (round count
-at `+4`, one 0x18-byte vector of matches per round; scene field `+0x2a8` set at `main+0x18ba01c`). The model is built
-after 201/12 by the completion handler registered at `main+0x17379f8` (`main+0x1737dd0`); reading it gives the meaning
-of the match fields (round, position) and of TournamentInfo's `u32`s.
+A phase 0 notification answered with entrants and no matches is accepted (the game keeps waiting), but it fixes the
+bracket layout before any match exists, and with any match the bracket screen then aborted with `std::out_of_range`.
+Cause and rules below (the 201/12 completion handler `main+0x1737dd0` only stores the result code).
+
+**Bracket model and why it aborted (2026-10-26, LLDB runs `tw2`..`tw7` with the port).** The bracket screen draws a model
+`M = [[main+0x5329740]+8]` (shared with the offline tourney screens): `+0` layout, `+4` round count, `+8` one vector of
+nodes per round, `+0x80` the players (0x820 bytes each, one per TournamentPlayerInfo, in map order). The builder
+(`main+0x237ee50`) takes the **shape from a fixed layout table** (`main+0x239d810`, 7 entries), not from the matches:
+
+| Layout | Players | Rounds | Players per match, by round |
+| --- | --- | --- | --- |
+| 0 | 8 | 2 | 4, 2 |
+| 1 | 8 | 3 | 2, 2, 2 |
+| 2 | 16 | 2 | 4, 4 |
+| 3 | 16 | 4 | 2, 2, 2, 2 |
+| 4 | 32 | 3 | 4, 4, 2 |
+| 5 | 32 | 5 | 2, 2, 2, 2, 2 |
+| 6 | 64 | 3 | 4, 4, 4 |
+
+Round `r` has `ceil(nodes of r-1 / group)` nodes (round 0 divides the player count); a node keeps `+0` group size, `+4`
+round, `+8` position, `+0x28` parent, `+0x10` children, `+0x38` player keys (round 0), `+0x50` winner key (-1 none).
+Round-0 nodes take **consecutive player keys** (`[0,1]`, `[2,3]`, ... or `[0..3]`, ...), whatever the matches say. The
+screen collects each round-0 node's players (`main+0x1d08510`) and `main+0x1d0e590` throws `std::out_of_range` on an
+empty node: that was the abort (2 players, layout 0, second node empty).
+
+The layout is chosen **once**, at the first TournamentInfo the sequence copies (`main+0x16c5200`, flag `seq+0x189`):
+the largest player-key list among the matches (`m`) and the player count (`n`) give 1v1 layouts 1/3/5 for `m = 2`,
+`n = 8/16/32`, and 4-player layouts 2/4/6 for `m = 4`, `n = 16/32/64` (table `main+0x4543250`, index `n/8 - 2`);
+anything else is layout 0. Hence the **first notification (phase 0) must come when the bracket is formed**, with its
+matches and exactly 8/16/32/64 players; sending phase 0 at entry (no matches yet) fixes layout 0 for good.
+
+**Match flow (verified with two instances, runs `tw7`..`tw14`):** after the bracket shows, each player sends AutoMatchmake
+109/40 with game mode 12 (attributes all 0, criteria `"12"`, so the server must pair a bracket match's players itself);
+the pair forms a gathering and Pia completes the mesh (job trace `tw8`). About 10 s later each sends **201/13**
+`{u32 tourney ID, u32}`, the `u32` being the tourney's phase (1 when the bracket was announced in phase 1, 0 in phase 0):
+answered `u32 0`, both leave (201/11, 50/1) with "connection error"; answered **`u32 1`, the match starts** and is
+played (`tw10`, `tw14`). When it ends each player posts its record (115/21 or 115/38), leaves the gathering (50/1) and
+sends **201/11** `{u32 tourney ID}`; answered `u32 0` the game goes back to the tourney's fighter select (no bracket, no
+next round). No 201/14 was sent. The request switch (`main+0x1736cd0`, jump table `main+0x44f4100`) sends kind 1 as
+201/11 when the tourney ID is known and as 201/10 (by event) before; kind 3 is 201/11 too, kind 4 201/13, kind 5 201/14
+(`{u32 tourney ID, u32, u32, u64}`); 13's and 14's answers are stored at the request's `+0x144`.
+Open: what 201/11's answer means (leaving, or the player's state after a match), how results reach the server (the
+records 115/21/38 carry Online Tourney counters; 201/14 unseen), and how later rounds are announced.
 
 ## Spectator: DataStore 115/54 (2026-10-25)
 

@@ -84,12 +84,15 @@ moves, and record dead ends so nobody repeats them.
      201/13 answered 1 starts the match, a match ends with **201/14** (answered 1; the replay is posted as DataStore type
      18 first) and both players then wait for the next phase (docs/re/protocols.md, "Online Tourney", "Rules and
      result"). Rules go in the event's period params (`[[events.periods]] params = { time_sec, stock, melee_rule }`).
-     **Exact next step:** the winner of a node is a player key (`main+0x239acc0`, protocols.md "Match fields"): test
-     the hypothesis that TournamentInfo's last `u32` is the asking player's own key (answer 201/12 per player), then,
-     when both 201/14 of a match are in, mark it finished (state 5, second `u8`), add the round-2 match (global ID after
-     round 1's, round 1 in the first `u8`, second `u32` = the match it comes from) and announce phase 1. 201/14's first
-     `u32` was 0 and the second 1 from both players of seats 0/1 (winner unknown in those runs: take screenshots of
-     the results screen to tie it to the winner). Dev scripts in the port's
+     The whole bracket is now sent (IDs from the final down, `next` links; `tw22`: shown and played).
+     **Exact next steps:** (1) **desync in tourney matches** (`tw22`): the two instances ended the same match with
+     different results (each view had the other's damage). Quickplay views agreed, so look for what differs in a tourney
+     match: a value each client takes from the server (TournamentMatchInfo's `u8`s / `u64`, TournamentInfo's `u32`s,
+     the event period) and feeds into the match setup (random seed, rules). Compare with Quickplay's gathering data. This
+     may also be port-side (determinism): if the server data is identical for both, tell the port session. (2) After 201/14
+     both fetch 201/12 again: answer with the match finished (state 5, second `u8`), the winner put in the next match's
+     keys (the winner is the player of both), and `[seq+0x54c]` (TournamentInfo's last `u32`, sent as the entrant
+     count) kept for the champion; the screenshots `tw22a/b-k*.png` show who each instance thinks won. Dev scripts in the port's
      `SSBU_build/analysis/dev-scripts/`:
      `tourney_pair.sh <run>` (two instances enter; no server variable needed now), `tourney_fight.sh <run> [s]`
      (both fight; with `stock = 1` in the period a match ends at the first KO, ~30 s; `SUICIDE=1` did not make b fall), `tourney_watch.sh` + `watch_trace.py`/`bracket_dump.py`/`step_trace.py`

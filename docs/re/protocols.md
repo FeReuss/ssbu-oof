@@ -392,9 +392,18 @@ match, else from the keys of the match named by the entry's `+4` (the second `u3
 (0x330 bytes, `seq+0x568`) are found by their first `u32`, which must equal the keys in the match lists (TournamentPlayerInfo's
 first `u32`); the builder copies it to both `+0x818` and `+0x81c` (`main+0x172b750`, `main+0x23808e0..0x23808f8`), so the
 winner is a **player key**: `[seq+0x54c]` for the first match, else a key shared with the match named by `+4`.
-Hypothesis to test: `seq+0x54c` is TournamentInfo's last `u32` (sent as the entrant count so far) and means the asking
-player's own key, the match vector being that player's path (`+4` linking a match to the one it came from). Then
-announce phase 1 with round 1 finished (state 5) and the round-2 matches.
+The node ID is computed from the **final down** (`main+0x239add8..0x239ae38`): the first entry's ID is the base (the
+final), then each earlier round's matches follow, the first round last; so the match vector's first entry is the
+final, whose winner comes from `[seq+0x54c]` (likely the champion's key), and a match's second `u32` is the **next
+match**, the one its winner plays (the winner is the player of both). The server now sends the whole bracket this way
+(final ID 0; run `tw22`: bracket shown, match played).
+
+**Verified in `tw22` (2026-10-26):** 201/13 is `{u32 tourney ID, u32 match ID}` (3 = the first-round match of seats 0
+and 1; earlier runs sent 0 or 1 because that match had those IDs), 201/14 is `{u32 tourney ID, u32 match ID, u32 (1 from
+both), u64 replay data ID}`, and about 13 s after 201/14 both players leave the gathering and **fetch 201/12 again by
+themselves**, expecting the result in the bracket. With `time_sec = 60, stock = 1` in the period the match shows a timer
+and ends with "Game!", the winner screen and the stats. **The two instances disagreed on the result** (each view showed
+the damage of the other player: a desync of the match), which Quickplay did not do; see PROGRESS "Next".
 
 ## Spectator: DataStore 115/54 (2026-10-25)
 

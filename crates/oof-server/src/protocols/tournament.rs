@@ -32,6 +32,8 @@ pub struct Match {
     pub round: u8,
     pub next: u32,
     pub players: Vec<u32>,
+    /// Sent as finished (state 5) once known.
+    pub winner: Option<u32>,
 }
 
 /// A bracket of one event: entrants grouped as they enter until it starts.
@@ -43,6 +45,51 @@ pub struct Bracket {
     /// Grows with every change the players must fetch (notification param2).
     pub phase: u8,
     pub matches: Vec<Match>,
+}
+
+impl Bracket {
+    /// Record `winner` (one of its players) as the winner of match `id`, move them on to the next match and settle every
+    /// match that can no longer be played. Returns false when the match is unknown, already decided, or `winner` did not
+    /// play in it.
+    pub fn decide(&mut self, id: u32, winner: u32) -> bool {
+        let Some(m) = self.matches.iter_mut().find(|m| m.id == id && m.winner.is_none() && m.players.contains(&winner))
+        else {
+            return false;
+        };
+        m.winner = Some(winner);
+        let next = (m.id != FINAL).then_some(m.next);
+        if let Some(n) = next.and_then(|n| self.matches.iter_mut().find(|m| m.id == n)) {
+            n.players.push(winner);
+        }
+        self.settle();
+        true
+    }
+
+    /// A full match with fewer than two players (empty seats) is not played: its player, or else its first seat, moves on.
+    fn settle(&mut self) {
+        while let Some(m) = self.matches.iter().find(|m| {
+            m.winner.is_none()
+                && m.players.len() == PER_MATCH
+                && m.players.iter().filter(|&&k| self.entrants[k as usize].pid != 0).count() < 2
+        }) {
+            let winner =
+                m.players.iter().copied().find(|&k| self.entrants[k as usize].pid != 0).unwrap_or(m.players[0]);
+            let id = m.id;
+            self.decide(id, winner);
+        }
+    }
+
+    /// The tourney's winner, once the final is decided.
+    pub fn champion(&self) -> Option<u32> {
+        self.matches.iter().find(|m| m.id == FINAL).and_then(|m| m.winner)
+    }
+
+    /// The players to tell about a change.
+    pub fn pids(&self) -> Vec<u64> {
+        let mut pids: Vec<u64> = self.entrants.iter().map(|e| e.pid).filter(|&p| p != 0).collect();
+        pids.dedup();
+        pids
+    }
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +104,8 @@ const PER_MATCH: usize = 2;
 /// Bracket sizes the game has a 1v1 layout for (`main+0x239d810`; docs/re/protocols.md, "Online Tourney").
 const SIZES: [usize; 3] = [8, 16, 32];
 const BRACKET_SIZE: usize = SIZES[SIZES.len() - 1];
+/// The final's match ID: IDs count from it (the game resolves the final's winner from TournamentInfo instead).
+const FINAL: u32 = 0;
 /// Seconds the entry stays open when the event does not set `tournament_entry_max_seconds` (the game's default).
 const ENTRY_SECONDS: u64 = 60;
 /// Notification type the game watches for tourney changes (category 201, the protocol).
@@ -90,16 +139,25 @@ impl Tournaments {
 
     /// Close the entry of bracket `id`: fill it up to a size the game has a layout for with empty seats (every round-1
     /// match needs players, an empty one aborts the game's bracket screen) and pair seats in entry order, so entrants
-    /// meet each other first. Returns the PIDs to tell.
-    /// shortcut: round 1 only; later rounds and results once the game's result report is decoded.
+    /// meet each other first; matches with fewer than two entrants are settled at once. Returns the PIDs to tell.
     pub fn start(&mut self, id: u32) -> Option<Vec<u64>> {
         let b = self.brackets.iter_mut().find(|b| b.id == id && b.matches.is_empty() && !b.entrants.is_empty())?;
         let size = SIZES.into_iter().find(|&s| s >= b.entrants.len()).unwrap_or(BRACKET_SIZE);
-        let mut pids: Vec<u64> = b.entrants.iter().map(|e| e.pid).collect();
-        pids.dedup();
         b.entrants.resize_with(size, Entrant::empty_seat);
         b.matches = bracket_matches(size);
-        Some(pids)
+        b.settle();
+        Some(b.pids())
+    }
+
+    /// 201/14: `winner` won match `match_id` of tourney `id`. Returns the new phase and the PIDs to tell when the
+    /// bracket changed (the second player's report of the same match changes nothing).
+    pub fn report(&mut self, id: u32, match_id: u32, winner: u32) -> Option<(u8, Vec<u64>)> {
+        let b = self.brackets.iter_mut().find(|b| b.id == id)?;
+        if !b.decide(match_id, winner) {
+            return None;
+        }
+        b.phase = b.phase.wrapping_add(1);
+        Some((b.phase, b.pids()))
     }
 
     /// 201/11: leave tourney `id`. Before the start the seat is freed; afterwards it stays (the player is absent).
@@ -109,13 +167,13 @@ impl Tournaments {
         }
     }
 
-    /// The other players of `pid`'s first-round match in its latest started bracket (Online Tourney matchmaking, game mode
-    /// 12, pairs only them).
+    /// The other players of `pid`'s current (undecided) match in its latest started bracket (Online Tourney matchmaking,
+    /// game mode 12, pairs only them).
     pub fn opponents(&self, pid: u64) -> Option<Vec<u64>> {
         let b =
             self.brackets.iter().rev().find(|b| !b.matches.is_empty() && b.entrants.iter().any(|e| e.pid == pid))?;
         let seat = b.entrants.iter().position(|e| e.pid == pid)? as u32;
-        let m = b.matches.iter().find(|m| m.round == 0 && m.players.contains(&seat))?;
+        let m = b.matches.iter().find(|m| m.winner.is_none() && m.players.contains(&seat))?;
         Some(m.players.iter().map(|&k| b.entrants[k as usize].pid).filter(|&p| p != pid && p != 0).collect())
     }
 }
@@ -135,7 +193,7 @@ fn bracket_matches(size: usize) -> Vec<Match> {
             let next = if r + 1 < per_round.len() { first(r + 1) + (p / PER_MATCH) as u32 } else { 0 };
             let players =
                 if r == 0 { ((p * PER_MATCH) as u32..((p + 1) * PER_MATCH) as u32).collect() } else { Vec::new() };
-            matches.push(Match { id: first(r) + p as u32, round: r as u8, next, players });
+            matches.push(Match { id: first(r) + p as u32, round: r as u8, next, players, winner: None });
         }
     }
     matches
@@ -214,7 +272,7 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
         // 9>}>} (readers main+0x2b03a0, 0x2b0fb0, 0x2b1740). Asked after every tourney notification.
         // TournamentMatchInfo = {u32 ID, u32 next match, u8 round, u8 state (5 = finished), u8, List<u32> player keys, u8,
         // u64}; the game fills the first round's seats from the round-0 matches in order (docs/re/protocols.md).
-        // shortcut: no results yet (every match state 0), and TournamentInfo's u32s other than ID and phase are guesses.
+        // shortcut: TournamentInfo's second u32 and second u8 are not known (sent as 0).
         12 => {
             let (_, mut p) = r.structure()?;
             let id = p.u32()?;
@@ -224,11 +282,13 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             let mut w = Writer::new();
             w.structure(0, |w| {
                 // +0x14 is the phase: the game refetches only when a notification carries a higher one
-                w.u32(bracket.id).u32(0).u8(bracket.phase).u8(0).u32(bracket.entrants.len() as u32);
+                // the last u32 gives the final's winner (main+0x239acc0 reads it for the first match, the final)
+                let last = bracket.champion().unwrap_or(bracket.entrants.len() as u32);
+                w.u32(bracket.id).u32(0).u8(bracket.phase).u8(0).u32(last);
                 w.u32(bracket.matches.len() as u32);
                 for m in &bracket.matches {
                     w.u32(m.id).structure(0, |w| {
-                        w.u32(m.id).u32(m.next).u8(m.round).u8(0).u8(0);
+                        w.u32(m.id).u32(m.next).u8(m.round).u8(if m.winner.is_some() { 5 } else { 0 }).u8(0);
                         w.list(&m.players, |w, k| {
                             w.u32(*k);
                         });
@@ -262,14 +322,18 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             w.u32(u32::from(method == 13));
             Ok(w.into_bytes())
         }
-        // 14: the match result, Struct{u32 tourney ID, u32 (0 in round 1), u32 (1 from both players of a 1v1 whose
-        // seats were 0 and 1: likely the winner's key), u64 (the data ID of the replay the player posted just before as
-        // DataStore type 18, else 0)} -> u32. Sent by each player when a match ends (verified with the game, run tw20).
-        // shortcut: only logged; results drive the next round once the meaning of the u32s is confirmed.
+        // 14: the match result, Struct{u32 tourney ID, u32 match ID, u32 winner's key, u64 data ID of the replay the
+        // player posted just before as DataStore type 18, else 0} -> u32, sent by each player when a match ends (both
+        // players agreed on the winner in runs tw16, tw22). The first report decides; then both fetch 201/12 again.
+        // shortcut: the first report is trusted; disagreeing reports are only logged.
         14 => {
             let (_, mut p) = r.structure()?;
-            let (id, a, b, replay) = (p.u32()?, p.u32()?, p.u32()?, p.u64()?);
-            tracing::info!(pid, id, a, b, replay, "tourney match result");
+            let (id, match_id, winner, replay) = (p.u32()?, p.u32()?, p.u32()?, p.u64()?);
+            let changed = ctx.state.tournaments.lock().expect("tournaments lock").report(id, match_id, winner);
+            tracing::info!(pid, id, match_id, winner, replay, decided = changed.is_some(), "tourney match result");
+            if let Some((phase, pids)) = changed {
+                announce(ctx.state, id, phase, &pids);
+            }
             let mut w = Writer::new();
             w.u32(1);
             Ok(w.into_bytes())
@@ -314,15 +378,15 @@ mod tests {
         assert_eq!(
             shape,
             vec![
-                (0, 2, 0, vec![]),
-                (1, 1, 0, vec![]),
-                (2, 1, 0, vec![]),
+                (0, 2, 0, vec![4]),
+                (1, 1, 0, vec![2]),
+                (2, 1, 0, vec![4, 6]),
                 (3, 0, 1, vec![0, 1]),
                 (4, 0, 1, vec![2, 3]),
                 (5, 0, 2, vec![4, 5]),
                 (6, 0, 2, vec![6, 7]),
             ],
-            "final first, winners of 3 and 4 meet in 1"
+            "final first, winners of 3 and 4 meet in 1; byes already moved on"
         );
         assert_eq!(bracket_matches(32).len(), 31);
         assert_eq!(t.opponents(10), Some(vec![11]));
@@ -342,5 +406,25 @@ mod tests {
         t.start(id);
         t.leave(id, 11);
         assert_eq!(t.opponents(10), Some(vec![11]), "a started bracket keeps the seat");
+    }
+
+    #[test]
+    fn winners_move_on_and_empty_seats_settle_themselves() {
+        let mut t = Tournaments::default();
+        let (id, _) = t.enter(1, player(10));
+        t.enter(1, player(11));
+        t.enter(1, player(12));
+        t.start(id);
+        let winners = |t: &Tournaments| t.get(id).unwrap().matches.iter().map(|m| m.winner).collect::<Vec<_>>();
+        // seats 3..7 are empty: entrant 2 gets a bye (match 4), the empty-only matches 5 and 6 and then 2 settle too
+        assert_eq!(winners(&t), [None, None, Some(4), None, Some(2), Some(4), Some(6)]);
+        assert_eq!(t.get(id).unwrap().matches[1].players, [2], "match 1 waits for match 3's winner");
+        assert!(t.report(id, 3, 5).is_none(), "seat 5 did not play match 3");
+        assert_eq!(t.report(id, 3, 1), Some((1, vec![10, 11, 12])));
+        assert!(t.report(id, 3, 1).is_none(), "the second report of the same match changes nothing");
+        assert_eq!(t.opponents(11), Some(vec![12]), "the winner's next match");
+        t.report(id, 1, 2);
+        // the final: entrant 2 against the empty seat 4 is settled, so entrant 2 wins the tourney
+        assert_eq!(t.get(id).unwrap().champion(), Some(2));
     }
 }

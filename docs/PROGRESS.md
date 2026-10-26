@@ -85,14 +85,12 @@ moves, and record dead ends so nobody repeats them.
      18 first) and both players then wait for the next phase (docs/re/protocols.md, "Online Tourney", "Rules and
      result"). Rules go in the event's period params (`[[events.periods]] params = { time_sec, stock, melee_rule }`).
      The whole bracket is now sent (IDs from the final down, `next` links; `tw22`: shown and played).
-     **Exact next steps:** (1) **desync in tourney matches** (`tw22`): the two instances ended the same match with
-     different results (each view had the other's damage). Quickplay views agreed, so look for what differs in a tourney
-     match: a value each client takes from the server (TournamentMatchInfo's `u8`s / `u64`, TournamentInfo's `u32`s,
-     the event period) and feeds into the match setup (random seed, rules). Compare with Quickplay's gathering data. This
-     may also be port-side (determinism): if the server data is identical for both, tell the port session. (2) After 201/14
-     both fetch 201/12 again: answer with the match finished (state 5, second `u8`), the winner put in the next match's
-     keys (the winner is the player of both), and `[seq+0x54c]` (TournamentInfo's last `u32`, sent as the entrant
-     count) kept for the champion; the screenshots `tw22a/b-k*.png` show who each instance thinks won. Dev scripts in the port's
+     Winners move on (201/14's third field is the winner's key, verified), byes settle themselves, the final's winner is
+     the champion (TournamentInfo's last `u32`). **Exact next step:** the champion's game fetches 201/12 every ~67 ms
+     forever once its tourney is won (`tw23`; with two entrants every later match is a bye): find what its sequence
+     waits for (the 201/12 completion path of the tourney sequence, `main+0x16c3cd0`, and TournamentInfo's unknown second
+     `u32` / second `u8`), e.g. a tourney-ended state or a state other than 5 for matches won without playing. No desync:
+     each view shows its own player on the left (an earlier note said otherwise). Dev scripts in the port's
      `SSBU_build/analysis/dev-scripts/`:
      `tourney_pair.sh <run>` (two instances enter; no server variable needed now), `tourney_fight.sh <run> [s]`
      (both fight; with `stock = 1` in the period a match ends at the first KO, ~30 s; `SUICIDE=1` did not make b fall), `tourney_watch.sh` + `watch_trace.py`/`bracket_dump.py`/`step_trace.py`

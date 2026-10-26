@@ -84,9 +84,10 @@ Server: **partial (round 1 playable).** Events come from the config (`[[events]]
 (201/9) puts the player in the event's open bracket; when the entry countdown ends the server fills the bracket to 8,
 16 or 32 seats (empty seats for the rest), pairs seats in entry order and announces phase 0; the game shows the bracket,
 matchmakes (game mode 12, the server pairs only the match's players), asks 201/13 (answered 1) and the match is played.
-When it ends both report it (201/14, answered 1) and wait for the next phase. Verified with two instances (2026-10-26).
-Match rules come from the event period's params. Gaps: advancing winners and later rounds (the server does not announce
-phase 1 yet), byes against empty seats, rewards and 4-player brackets (docs/re/protocols.md, "Online Tourney").
+When it ends both report the winner (201/14); the winner moves on, matches against empty seats settle themselves and
+the final's winner is the champion. Verified with two instances (2026-10-26). Match rules come from the event period's
+params. Gaps: the champion's game keeps asking for the bracket after winning (an end state is missing), later rounds
+between real players not yet played, rewards, 4-player brackets (docs/re/protocols.md, "Online Tourney").
 
 ## Spectator mode
 

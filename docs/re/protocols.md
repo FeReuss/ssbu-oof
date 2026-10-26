@@ -399,13 +399,20 @@ match**, the one its winner plays (the winner is the player of both). The server
 (final ID 0; run `tw22`: bracket shown, match played).
 
 **Verified in `tw22` (2026-10-26):** 201/13 is `{u32 tourney ID, u32 match ID}` (3 = the first-round match of seats 0
-and 1; earlier runs sent 0 or 1 because that match had those IDs), 201/14 is `{u32 tourney ID, u32 match ID, u32 (1 from
-both), u64 replay data ID}`, and about 13 s after 201/14 both players leave the gathering and **fetch 201/12 again by
+and 1; earlier runs sent 0 or 1 because that match had those IDs), 201/14 is `{u32 tourney ID, u32 match ID, u32 winner
+key, u64 replay data ID}`, and about 13 s after 201/14 both players leave the gathering and **fetch 201/12 again by
 themselves**, expecting the result in the bracket. With `time_sec = 60, stock = 1` in the period the match shows a timer
-and ends with "Game!", the winner screen and the stats. **The two instances disagreed on the result** (each view showed
-the damage of the other player: a desync of the match), which Quickplay did not do; see PROGRESS "Next". In both views
-the local player lost, and both reported `1` in 201/14's third field, so that field is most likely the reporting
-player's own result (1 = lost / second place); `tw20` and `tw21` match the same pattern.
+and ends with "Game!", the winner screen and the stats. Both views agree (each view shows its own player first, on the
+left, as Quickplay does). **201/14's third field is the winner's player key**: in `tw23` the entrant of seat 0 won on
+both screens and both players reported 0.
+
+**Winners and the end (`tw23`, server with winner advancement):** after the first report the server marks the match
+finished, moves the winner on and settles the matches left with fewer than two entrants (byes); with two entrants the
+winner of the only real match becomes the champion at once. Both players then see "On to the next match!" on the
+results screen. The loser fetches 201/12 a few times and stops; **the champion fetches 201/12 every ~67 ms without
+end** (1535 requests in two minutes): its sequence waits for something the bracket does not say yet (likely a
+tourney-level state in TournamentInfo's second `u32` / second `u8`, or matches decided without being played needing
+another state than 5).
 
 ## Spectator: DataStore 115/54 (2026-10-25)
 

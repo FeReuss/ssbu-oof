@@ -1,7 +1,8 @@
 # Agent notes
 
 - Start with `README.md` and `docs/features.md` (what works, what is pending, the first step for each pending
-  feature); design notes and testing pitfalls are in `docs/DEVELOPMENT.md`, RE facts in `docs/re/protocols.md`.
+  feature); design notes and testing pitfalls are in `docs/DEVELOPMENT.md`, RE facts in `docs/re/protocols.md`, every request
+  the server answers in `docs/requests.md` (update it with each new method).
 - Project language is English (code, docs, commits). The maintainer may talk to you in Spanish.
 - Never add game data, keys, disassembly listings or code from AGPL/GPL projects (`LEGAL.md`). The game dump used for
   analysis stays outside the repository (`tools/re/README.md`).

@@ -23,11 +23,12 @@ play their matches peer to peer. Online Tourneys, Elite Smash and Spectator are 
 | Battle Arenas | Create, browse, join (Arena ID, password), rules/comment updates, friends' arenas |
 | Friends | Friend lists, requests and blocks kept by the server (standard §7) |
 | Player records | The game's online record (disconnects, conduct) persisted in SQLite |
-| Shared Content | Post, browse, download and like replays |
+| Shared Content | Post, browse, download, like and unlike replays |
 | NAT check + traversal | What Pia needs to connect players P2P: the two NAT check addresses can share a host, sit behind 1:1 NAT, or live on two machines |
 | Operation | Service switches and timed events from the config; account lookup, ban and unban from the command line |
 
-Details per feature: [docs/features.md](docs/features.md).
+Details per feature: [docs/features.md](docs/features.md). Every request the game sends, with its use and the
+layout of request and response: [docs/requests.md](docs/requests.md).
 
 ## Pending
 
@@ -35,7 +36,7 @@ Details per feature: [docs/features.md](docs/features.md).
   never ends for its champion, and rewards and 4-player brackets are missing.
 - **Elite Smash** — not supported yet: Smash power (GSP), Matchmake Referee rounds, the Elite threshold.
 - **Spectator** — not supported yet; it depends on Elite Smash, whose matches provide the broadcasts.
-- Smaller gaps: Quickplay does not yet prefer closer rules or Smash power; Shared Content lacks search by ID, unlike,
+- Smaller gaps: Quickplay does not yet prefer closer rules or Smash power; Shared Content lacks search by ID,
   stages / Mii fighters / spirit teams / videos, deleting and reporting posts; one server node (no scale-out yet); no
   automated conformance check for ports.
 
@@ -66,7 +67,7 @@ Running a public server (TLS, firewall, NAT check addresses, systemd, backups): 
 ```
 crates/oof-nex      wire codecs (NEX streams, RMC, PRUDP Lite, Kerberos), no I/O
 crates/oof-server   the server (axum + tokio, SQLite)
-docs/               standard, architecture, features, deployment, development, RE findings
+docs/               standard, architecture, features, request reference, deployment, development, RE findings
 tools/re/           analysis scripts that read your own dump of the game
 ```
 

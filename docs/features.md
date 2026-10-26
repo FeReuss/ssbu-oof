@@ -1,7 +1,8 @@
 # Online features: how SSBU implements them and what the server does
 
 ssbu-oof 0.2.0. Status: **supported** = implemented and played with the real game; **partial** = works with the gaps
-listed; **pending** = not supported yet. Protocol evidence and layouts: [re/protocols.md](re/protocols.md).
+listed; **pending** = not supported yet. Request layouts: [requests.md](requests.md); evidence:
+[re/protocols.md](re/protocols.md).
 
 ## Foundation (every feature)
 
@@ -53,10 +54,11 @@ Browse, passwords and arenas of 3+ players are implemented but not yet exercised
 ## Shared Content
 
 Server: **partial.** Posting a replay (DataStore 115/24, HTTP upload to `/v1/objects/<id>`, 115/62), browsing per tab
-(115/80, 115/66), downloading and playing it (115/45 + HTTP GET) and likes (115/96) work with the game. Objects and
+(115/80, 115/66), downloading and playing it (115/45 + HTTP GET), likes and taking them back (115/96) work with the
+game. Objects and
 their data are stored in SQLite.
 
-Gaps: search by ID, unlike, posting stages / Mii fighters / spirit teams / videos (likely the same flow with other
+Gaps: search by ID, posting stages / Mii fighters / spirit teams / videos (likely the same flow with other
 data types), deleting one's own posts, reporting content (Screening 124).
 
 ## Online Tourneys — pending

@@ -16,16 +16,16 @@ secret = "REPLACE_WITH_64_HEX_CHARACTERS_REPLACE_WITH_64_HEX_CHARACTERS_00"
 # ID token lifetime in seconds.
 token_ttl_secs = 3600
 
-# NAT check server used by Pia for NAT detection (the game's nncs1/nncs2 hosts).
-# SQLite file for what must survive a restart: the players' DataStore records (SSBU keeps its online record in them,
-# including disconnects and conduct warnings). Omit it to keep them in memory only.
+# SQLite file for what must survive a restart: accounts, friends, bans and the players' DataStore records (SSBU keeps
+# its online record in them, including disconnects and conduct warnings). Omit it to keep them in memory only.
 database = "oof.db"
 
 # Development only: take each client's public address from the station URLs it registers instead of the address its
-# connections come from (several game instances on one machine, the MacNativeGames port's OOF_VIRTUAL_INDEX). Never
-# enable it on a public server: clients could claim any address.
+# connections come from (several game instances on one machine, each with its own virtual address). Never enable it on
+# a public server: clients could claim any address.
 # trust_client_address = true
 
+# NAT check used by Pia for NAT detection (the game's nncs1/nncs2 hosts); without it there are no online battles.
 [nat_check]
 # nncs1 and nncs2: two different public IPv4 addresses, each serving UDP 10025 and 10125 (nncs1 also 33334/33335).
 # Pia needs both; the port reads them from GET /v1/status.
@@ -39,20 +39,22 @@ secondary = "203.0.113.2"
 # remote_secondary = true
 
 # Online services the game switches on from the server (Utility 110/7 GetIntegerSettings, index 0). The game checks
-# these keys before opening each online sequence and shows "service not available" when a key is not 1 (keys 9006 and
-# 9007 default to off: Online Tourney and Spectator). docs/re/protocols.md, "Service switches".
+# these keys before opening each online sequence and shows "service not available" when a key is not 1.
+# docs/re/protocols.md, "Service switches". 9006 (Online Tourney) and 9007 (Spectator) open features ssbu-oof does not
+# support yet: leave them off on a public server.
 [integer_settings.0]
 "9002" = 1
 "9003" = 1
 "9004" = 1
-"9006" = 1
-"9007" = 1
 "9011" = 1
+# "9006" = 1
+# "9007" = 1
 
 # Timed events (Utility 110/11): online tourneys and the online menu banner. `kinds` is a category bitmask (the menu
 # asks for 4, the tourney screen for 3); a tourney runs from times[1] and each period is one session the game shows and
 # lets players enter. Times are UTC. Layout and the parameter keys: docs/re/protocols.md, "Game events". A tourney's
-# match rules are read from the current period's params (event-level rules are ignored: matches never end).
+# match rules are read from the current period's params (event-level rules are ignored: matches never end). Online
+# Tourneys are not supported yet: events are for development.
 # [[events]]
 # id = 1
 # kinds = 5

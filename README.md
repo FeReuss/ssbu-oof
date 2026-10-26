@@ -1,65 +1,74 @@
 # ssbu-oof — Super Smash Bros. Ultimate Open Online Framework
 
-A fast, scalable server for the online features of **Super Smash Bros. Ultimate 13.0.5**, and a
-**standard** that lets every native port and emulator use it the same way.
+**Version 0.2.0** · port standard **v0.2** · HTTP API `/v1`
 
-Ports of Switch games (Zelda BotW, TotK, SSBU, …) each handle online play differently, if at all.
-ssbu-oof takes the opposite approach: the unmodified game keeps speaking its own network protocols
-(NEX over PRUDP Lite/WebSocket, Pia P2P), the server speaks them back, and a port only has to
-provide a handful of console services in a standard way ([docs/STANDARD.md](docs/STANDARD.md)).
+A server for the online features of **Super Smash Bros. Ultimate 13.0.5**, and a **standard** that lets every native
+port and emulator use it the same way.
 
-> Status: early. Login, secure connection, NAT traversal and the matchmaking core (Quickplay,
-> co-op, background matchmaking, Battle Arenas) are implemented and tested against a protocol-level
-> client. The real game, through a native port, logs in and reaches the online menu; matchmaking
-> with the real game is not proven yet. See [docs/PROGRESS.md](docs/PROGRESS.md).
+Ports of Switch games each handle online play differently, if at all. ssbu-oof takes the opposite approach: the
+unmodified game keeps speaking its own network protocols (NEX over PRUDP Lite/WebSocket, Pia P2P), the server speaks
+them back, and a port only has to provide a handful of console services in a standard way
+([docs/STANDARD.md](docs/STANDARD.md)). Ports that follow the standard play together (crossplay).
 
-## Features
+**Status:** online multiplayer works on a public server: players sign in, meet through Quickplay or Battle Arenas and
+play their matches peer to peer. Online Tourneys, Elite Smash and Spectator are still pending (below).
 
-| Feature | Status |
+## Supported
+
+| Feature | What works |
 | --- | --- |
-| Accounts: user name + password (no e-mail/phone), device keys, bans, password change | implemented |
-| Login (ID token → Kerberos ticket → secure server) | implemented |
-| Quickplay / background matchmaking / online co-op | full matches and rematches played with the real game; rule scoring todo |
-| Players' online records (DataStore, SQLite) | implemented |
-| Battle Arenas (create, browse, join, passwords, updates, Arena ID) | implemented |
-| NAT check + NAT traversal for Pia P2P | implemented (SSBU 13.0.5 has no relay to serve) |
-| Shared Content (post, browse, download, likes) | replays verified with the real game; other content types todo |
-| Online Tourneys | entry and tourney info work; brackets and matches in progress |
-| Spectator mode (watching online matches) | **not working yet**: needs Elite Smash and the broadcast uploads |
-| Elite Smash (GSP) | reverse-engineered surface documented, server todo |
+| Accounts | User name (also the in-game nickname) + password, no e-mail or phone; revocable device keys; password change; bans with a reason, applied to connected players within 30 s |
+| Login | ID token → Kerberos ticket → secure NEX connection |
+| Quickplay | Matchmaking by the player's rules, background matchmaking, online co-op (two players on one console), rematches |
+| Battle Arenas | Create, browse, join (Arena ID, password), rules/comment updates, friends' arenas |
+| Friends | Friend lists, requests and blocks kept by the server (standard §7) |
+| Player records | The game's online record (disconnects, conduct) persisted in SQLite |
+| Shared Content | Post, browse, download and like replays |
+| NAT check + traversal | What Pia needs to connect players P2P: the two NAT check addresses can share a host, sit behind 1:1 NAT, or live on two machines |
+| Operation | Service switches and timed events from the config; account lookup, ban and unban from the command line |
 
-Details per feature: [docs/features.md](docs/features.md). Protocol findings:
-[docs/re/protocols.md](docs/re/protocols.md).
+Details per feature: [docs/features.md](docs/features.md).
+
+## Pending
+
+- **Online Tourneys** — not supported yet. Entering, the bracket and its matches are partly implemented, but a tourney
+  never ends for its champion, and rewards and 4-player brackets are missing.
+- **Elite Smash** — not supported yet: Smash power (GSP), Matchmake Referee rounds, the Elite threshold.
+- **Spectator** — not supported yet; it depends on Elite Smash, whose matches provide the broadcasts.
+- Smaller gaps: Quickplay does not yet prefer closer rules or Smash power; Shared Content lacks search by ID, unlike,
+  stages / Mii fighters / spirit teams / videos, deleting and reporting posts; one server node (no scale-out yet); no
+  automated conformance check for ports.
 
 ## Quick start
 
 ```sh
 cargo build --release
-cp oof.example.toml oof.toml          # set `secret` (openssl rand -hex 32) and public_host
+cp oof.example.toml oof.toml          # set `secret` (openssl rand -hex 32), public_host, nat_check, database
 ./target/release/oof-server oof.toml
 curl localhost:8080/v1/status
 ```
 
-- `GET /` — NEX WebSocket endpoint (subprotocol `NEX`) the game connects to through its port.
-- `POST /v1/accounts`, `/v1/login`, `/v1/token`, `/v1/logout`, `/v1/password` — accounts, device logins and ID
-  tokens for ports (docs/STANDARD.md §2).
-- `oof-server oof.toml account|ban|unban <user|pid> …` — administration on the server's database (a ban stops new
-  logins and disconnects the player within 30 s).
-- UDP 10025/10125 — NAT check for Pia.
+| Interface | Use |
+| --- | --- |
+| `GET /` | NEX WebSocket endpoint (subprotocol `NEX`) the game connects to through its port |
+| `POST /v1/accounts`, `/v1/login`, `/v1/token`, `/v1/logout`, `/v1/password` | Accounts, device logins and ID tokens (standard §2) |
+| `POST /v1/friends`, `/v1/friends/{add,remove,block,unblock}` | Friends (standard §7) |
+| `GET /v1/status` | Version, load and the NAT check addresses ports must resolve |
+| `/v1/objects/…` | Shared Content uploads and downloads |
+| UDP 10025, 10125 (both NAT check addresses), 33334, 33335 (primary) | Pia's NAT check |
+| `oof-server <config> account\|ban\|unban …` | Administration on the server's database |
+| `oof-server nat-check <address> [<bind address>]` | The second NAT check address on another machine |
 
-Run behind a TLS terminator for `wss://`. Logs: `RUST_LOG=debug` shows every unimplemented call the
-game makes.
+Running a public server (TLS, firewall, NAT check addresses, systemd, backups): [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Layout
 
 ```
 crates/oof-nex      wire codecs (NEX streams, RMC, PRUDP Lite, Kerberos), no I/O
-crates/oof-server   the server (axum + tokio)
-docs/               standard, architecture, features, progress, RE findings
+crates/oof-server   the server (axum + tokio, SQLite)
+docs/               standard, architecture, features, deployment, development, RE findings
 tools/re/           analysis scripts that read your own dump of the game
 ```
-
-Architecture and scaling notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development
 
@@ -67,11 +76,13 @@ Architecture and scaling notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 cargo test && cargo clippy --all-targets && cargo fmt --check
 ```
 
-Contributions must follow the clean-room rules in [LEGAL.md](LEGAL.md): no game data, keys,
-disassembly listings or code from incompatible licenses.
+Design notes, testing with the game and the reverse-engineering workflow: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md),
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/re/protocols.md](docs/re/protocols.md). Contributions must follow
+the clean-room rules in [LEGAL.md](LEGAL.md): no game data, keys, disassembly listings or code from incompatible
+licenses.
 
 ## Legal
 
-MIT licensed ([LICENSE](LICENSE)). Not affiliated with or endorsed by Nintendo; trademarks belong to
-their owners. You need your own legally obtained copy of the game. Protocol documentation by
-kinnay/NintendoClients (MIT) was used as a cross-reference ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+MIT licensed ([LICENSE](LICENSE)). Not affiliated with or endorsed by Nintendo; trademarks belong to their owners. You
+need your own legally obtained copy of the game. Public protocol documentation was used as a cross-reference
+([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).

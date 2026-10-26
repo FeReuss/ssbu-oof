@@ -1,4 +1,6 @@
-# OOF port standard, v0.2 (draft)
+# OOF port standard v0.2
+
+Implemented by ssbu-oof 0.2.0.
 
 What a native port or emulator of **Super Smash Bros. Ultimate 13.0.5** must do so the unmodified
 game plays online through an ssbu-oof server. The game keeps speaking its own protocols; the port
@@ -137,3 +139,5 @@ server log (`ticket granted`, `secure connection`, `auto matchmake`) shows each 
 - v0.2 (2026-10-25): §2 accounts with a player-chosen user name and password (no e-mail or phone), device keys
   instead of stored passwords, bans (`403` with reason), logout and password change; `GetNickname` returns the user
   name. The v0.1 anonymous `POST /v1/accounts` with an empty body and `{"pid", "password"}` tokens are gone.
+- v0.2 (2026-10-25): §7 friends kept by the server.
+- v0.2 (2026-10-26): first public release, with ssbu-oof 0.2.0.

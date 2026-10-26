@@ -142,12 +142,9 @@ From `main`'s imports (this is what a port must provide; see `docs/STANDARD.md`)
 - `nn::friends`: friend list, profiles, presence, play history, blocked users.
 - `nn::ldn` (local wireless) is not online play and is not covered.
 
-## Quickplay eligibility calls (port experiment, 2026-10-24)
+## Quickplay eligibility calls (2026-10-24)
 
-The port session supplied `~/Documents/ssbu-oof-experimento-quickplay.patch` and its report.
-The server now handles these calls, with required fields decoded rather than merely skipping the
-outer structure. Response evidence below comes from that session's binary analysis and game runs;
-this integration has transport-level regression tests but has not been rerun with the real game.
+Calls the game makes before Quickplay. The server answers them with neutral values; field meanings are not confirmed.
 
 | Protocol/method | Request | Response | Reported binary evidence |
 | --- | --- | --- | --- |
@@ -155,12 +152,8 @@ this integration has transport-level regression tests but has not been rerun wit
 | Utility 110/9 | `Struct{u32, u32, String}`; observed `6, 3, "US"` | `Struct{u32, u32, u32}` (zeros) | reader `main+0x25e710` |
 | Utility 110/10 | `Struct{Struct{u32, u32, u32}, i32}`; observed sentinel `-1` | `Struct{bool, u32}` (`false, 0`) | reader `main+0x25e8d0`, boolean reader `main+0x1d0670` |
 
-In the port experiment `true` in 110/10 immediately produced the unstable-network message;
-`false` let the game proceed. The field meanings remain unconfirmed; these are neutral compatibility
-responses, not an implemented restriction policy. The experiment's next missing call was **DataStore
-115/8 (37-byte request)**. Quickplay matchmaking and Pia NAT traversal remain unverified.
-
-The experimental patch's full RMC-body logging was not imported: bodies can contain account tokens.
+With `true` in 110/10 the game immediately shows its unstable-network message; `false` lets it proceed. These are
+neutral compatibility answers, not a restriction policy.
 
 ### DataStore 115/8: GetMeta
 
@@ -170,17 +163,10 @@ call's `request_calls`) confirms the field widths; names follow the public NEX D
 A zero data ID selects a persistent owner/slot lookup. The response extractor `main+0x28c3f0`
 delegates to the structure reader at `main+0x28a310` (`DataStoreMetaInfo`).
 
-The server currently has no stored objects. Both direct-ID and persistent-slot queries therefore
-return the RMC error `DataStore::NotFound` (`0x80690004`, public NEX error table), after parsing all
-required fields. Returning successful fabricated metadata would claim an object that cannot be
-retrieved. Access passwords are not logged. Transport tests cover both lookup forms, all truncated
-request prefixes, and continued session usability after a miss.
+A lookup that finds nothing returns the RMC error `DataStore::NotFound` (`0x80690004`, public NEX error table); the
+game accepts it for a player without a record and goes on to matchmaking. Access passwords are not logged.
 
-**Runtime confirmed:** the port's two-instance retry accepted NotFound and reached fighter selection.
-Our no-submit runs `confirm58a/b` also accepted it and proceeded to matchmaking. This implements
-empty-store lookup, not DataStore persistence or uploads; later content features still require storage.
-
-**Objects posted with 115/21 are now found** (2026-10-25): by data ID, or with data ID 0 by owner and persistence
+**Objects posted with 115/21 are found**: by data ID, or with data ID 0 by owner and persistence
 slot, subject to the object's read permission (0 public, 2 listed PIDs, 3 owner only; friend kinds admit only the
 listed PIDs for now). The reader at `main+0x28a310` reads, in order: `u64 dataId, PID owner, u32 size, String name,
 u16 dataType, qBuffer metaBinary, DataStorePermission permission, DataStorePermission delPermission, DateTime
@@ -455,8 +441,7 @@ string).
 ### Matchmake Extension 109/58 (2026-10-24)
 
 Both real game instances reached fighter confirmation after accepting GetMeta/NotFound, then called
-109/58 with 4-byte bodies and received NotImplemented (port log `logs/oof-current.log`,
-04:38:30 and 04:38:43 UTC). No match was established. The request writer at `main+0x252418..0x252430`
+109/58 with 4-byte bodies (the server did not implement it yet, so no match was established). The request writer at `main+0x252418..0x252430`
 sets method 58 and writes four bytes. Extractor `main+0x253f30` reads one four-byte result, with no
 structure header. Thus the wire contract is **u32 -> u32**. The subsequent trace below establishes its use.
 The previous "gathering ID" label was an assumption, not a verified field meaning.
@@ -486,19 +471,8 @@ filter, including rejecting a gathering missing a required attribute. Tests prov
 meet and clients in another group do not, even with the same NEX game_mode. This is queue separation, not a
 completed GSP/rules-preference ranking implementation.
 
-Runtime verification (local no-GPU-submission port run `confirm58a`, same 13.0.5 executable):
-2026-10-24 04:50:56 UTC, the server resolved **mode 1 -> group 1**, then accepted **AutoMatchmake 109/40**
-and created gathering 1 for the same principal. The client loaded `lua2cpp_donkey` and did not show
-2306-0103 at that point. Logs: port `SSBU_build/logs/confirm58a.log`, isolated server
-`/private/tmp/ssbu-oof-method58-confirm.log`. This confirms progression past 58; it does not prove
-Nintendo's original assignment policy or a P2P fight. No GPU submission was enabled.
-
-Two-instance follow-up (`confirm58c/d`, both no-submit, distinct accounts and game-slot directories):
-at **04:53:38 UTC** both resolved mode 1 -> group 1; at **04:53:39 UTC** AutoMatchmake returned
-**gid=3, players=1** then **gid=3, players=2**. `/v1/status` reported one session and two online players.
-This verifies that real game requests carrying the selected group can pair in the same gathering.
-It does not establish a P2P connection, input exchange or completed battle. The temporary verification
-listener was 127.0.0.1:18090; no Nintendo service was contacted and no GPU submission enabled.
+With this policy two real game instances in the same queue mode resolved the same group and AutoMatchmake put them in
+one gathering.
 
 ## After AutoMatchmake: Pia waits for its own participation notification (2026-10-24)
 
@@ -580,5 +554,4 @@ needed to get one step further; the server rules derived from them are in `secur
 
 Pia packet crypto (Kinnay's NintendoClients wiki, verified on these captures): AES-128-GCM, key = the matchmake session key's
 first 16 bytes, nonce = connection id (1 byte) + gathering id & 0xFFFFFF (3 bytes, big-endian) + the header's 8-byte
-nonce, tag at header offset 0x10, no AAD. The server logs the session key at TRACE so a test capture can be decrypted
-(the port's `SSBU_build/analysis/dev-scripts/pia_decrypt.py`).
+nonce, tag at header offset 0x10, no AAD. The server logs the session key at TRACE so a test capture can be decrypted.

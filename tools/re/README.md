@@ -8,8 +8,8 @@ Stdlib-only Python 3 scripts that read the user's own dump; nothing here contain
 The extraction reuses NSWMacPort's verified scripts (any equivalent tool works):
 
 ```sh
-NSW=~/Documents/Proyectos/NSWMacPort       # needs its .venv (cryptography, lz4)
-W="$HOME/Downloads/emulacion nsw/juegos/SSBU_work.noindex/v1305"   # keep outside the repo
+NSW=/path/to/NSWMacPort                     # needs its .venv (cryptography, lz4)
+W=/path/to/ssbu-work.noindex/v1305          # any folder outside this repository
 $NSW/.venv/bin/python -I $NSW/games/totk/scripts/extract_exefs.py "<ssbu 13.0.5 update>.nsp" \
     --keys "<prod.keys>" --title-id 0x01006A800016E000 --update --output "$W/exefs"
 $NSW/.venv/bin/python -I $NSW/games/totk/scripts/prepare_modules.py "$W/exefs" --output "$W/elf"

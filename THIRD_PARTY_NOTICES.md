@@ -7,13 +7,17 @@
   and NEX protocol method tables. ssbu-oof's code is an independent implementation; every format it
   relies on was checked against the SSBU 13.0.5 binary where noted in `docs/re/`.
 
+- **Pretendo Network's public protocol documentation** (Pia pages): the `NatProbeData` layout of Pia's NAT dummies was
+  cross-checked against it; the documentation was read, no code from Pretendo's projects was used.
+
 No source code from other server projects is included.
 
 ## Rust dependencies
 
-Fetched by Cargo at build time under their own licenses (all MIT and/or Apache-2.0): `tokio`, `axum`,
-`serde`, `serde_json`, `toml`, `tracing`, `tracing-subscriber`, `md-5`, `hmac`, `sha2`, `base64`,
-`getrandom`, and for tests `tokio-tungstenite` and `futures-util`. Run `cargo tree` for the full set.
+Fetched by Cargo at build time under their own licenses (MIT and/or Apache-2.0): `tokio`, `axum`, `serde`,
+`serde_json`, `toml`, `tracing`, `tracing-subscriber`, `md-5`, `hmac`, `sha2`, `base64`, `getrandom`, `argon2`,
+`rusqlite` (which bundles SQLite, public domain), and for tests `tokio-tungstenite` and `futures-util`. Run
+`cargo tree` for the full set.
 
 ## Algorithms
 

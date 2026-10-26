@@ -1,9 +1,9 @@
 # Agent notes
 
-- Start with `docs/PROGRESS.md` (state, next steps, pitfalls); RE facts are in `docs/re/protocols.md`.
+- Start with `README.md` and `docs/features.md` (what works, what is pending, the first step for each pending
+  feature); design notes and testing pitfalls are in `docs/DEVELOPMENT.md`, RE facts in `docs/re/protocols.md`.
 - Project language is English (code, docs, commits). The maintainer may talk to you in Spanish.
-- Never add game data, keys, disassembly listings or code from AGPL/GPL projects (`LEGAL.md`).
-- Game dump for analysis: `~/Downloads/emulacion nsw/juegos/SSBU_work.noindex/v1305/elf/main.elf`
-  (outside the repo; recreate with `tools/re/README.md`).
-- Build/test: `cargo test`, `cargo clippy --all-targets`, `cargo fmt`. Rust via `~/.cargo/bin`.
-- Commits: `-c user.name=FeReuss -c user.email=102842515+FeReuss@users.noreply.github.com`.
+- Never add game data, keys, disassembly listings or code from AGPL/GPL projects (`LEGAL.md`). The game dump used for
+  analysis stays outside the repository (`tools/re/README.md`).
+- Build/test: `cargo test`, `cargo clippy --all-targets`, `cargo fmt`.
+- Keep every doc on the version in `Cargo.toml` (`[workspace.package] version`) and the standard's version.

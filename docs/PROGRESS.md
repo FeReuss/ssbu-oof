@@ -103,9 +103,9 @@ moves, and record dead ends so nobody repeats them.
    - Then Elite Smash: Matchmake Referee 120 (1/3/4/12/14 layouts in "Request layouts"), Smash power. **First Referee
      call seen (2026-10-26, port run `qp29`, config with switches 9002-9015 and events):** right after leaving a Quickplay
      gathering the player sent 110/11 then **120/12 GetOrCreateStats `{u32 1, u32 1500}`** (unimplemented; the response
-     reader `main+0x25c130` reads roughly `{u8, u32, u64, u32, u32}`, to be confirmed by hand). In that run the
-     Quickplay mesh failed (the joiner left ~10 s after 3/4) while tourney meshes with the same config worked: compare with
-     `oof-virt.toml` (no switches, no events) before changing anything. Its client wrappers (`main+0x25abc0` StartRound,
+     reader `main+0x25c130` reads roughly `{u8, u32, u64, u32, u32}`, to be confirmed by hand). The Quickplay mesh failure
+     of that run was the test setup (no virtual addresses for the two instances), not the server; with `oof-virt.toml`
+     (no switches 9010-9015) Quickplay plays and the Referee is not called, so those switches likely enable it. Its client wrappers (`main+0x25abc0` StartRound,
      `0x25adc0` EndRound, `0x25b1c0` GetOrCreateStats, `0x25b3c0` 14) are reached only through `+0x20` thunks
      (`main+0x25abb0`...) with no relocation pointing at them, so find the callers from the owning service object (the
      matchmake service's Referee member) or break on the wrappers with LLDB during a Quickplay match.

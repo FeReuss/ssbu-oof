@@ -296,6 +296,50 @@ async fn change_password(AxState(state): App, Json(c): Json<Credentials>) -> axu
     }
 }
 
+#[derive(Deserialize)]
+struct ObjectKey {
+    k: String,
+}
+
+/// Upload of a DataStore object's payload to the URL 115/24 handed out (PUT, or POST with a multipart form).
+async fn put_object(
+    AxState(state): App,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+    axum::extract::Query(key): axum::extract::Query<ObjectKey>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    if key.k != objects::url_key(&state.secret, id, true) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let kind = headers.get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let Some(data) = objects::upload_body(kind, &body) else { return StatusCode::BAD_REQUEST.into_response() };
+    match state.objects.lock().expect("objects lock").upload(id, data) {
+        Ok(true) => {
+            tracing::debug!(id, len = data.len(), "object payload uploaded");
+            StatusCode::OK.into_response()
+        }
+        Ok(false) => StatusCode::BAD_REQUEST.into_response(),
+        Err(e) => database_error(e),
+    }
+}
+
+/// Download of a completed object's payload from the URL 115/25 handed out.
+async fn get_object(
+    AxState(state): App,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+    axum::extract::Query(key): axum::extract::Query<ObjectKey>,
+) -> axum::response::Response {
+    if key.k != objects::url_key(&state.secret, id, false) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.objects.lock().expect("objects lock").payload(id) {
+        Ok(Some(data)) => ([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], data).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => database_error(e),
+    }
+}
+
 async fn status(AxState(state): App) -> impl IntoResponse {
     let online = state.sessions.read().expect("sessions lock").len();
     let sessions = state.matchmaking.lock().expect("matchmaking lock").len();
@@ -314,6 +358,13 @@ pub fn router(state: Arc<State>) -> Router {
         .route("/v1/logout", post(logout))
         .route("/v1/password", post(change_password))
         .route("/v1/status", get(status))
+        .route(
+            "/v1/objects/{id}",
+            get(get_object)
+                .put(put_object)
+                .post(put_object)
+                .layer(axum::extract::DefaultBodyLimit::max(objects::MAX_PAYLOAD + (1 << 16))),
+        )
         .route("/v1/friends", post(friends))
         .route("/v1/friends/add", post(friends_add))
         .route(

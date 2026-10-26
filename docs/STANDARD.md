@@ -78,6 +78,10 @@ validating it with `oof.ca` or the system trust store, and MUST ignore the impor
 those names. With `oof.tls = false` the port MUST pass the bytes through unencrypted (development
 only). The server never sees anything that depends on Nintendo certificates.
 
+Shared Content transfers (DataStore uploads and downloads) go to `https://<public host>:<public port>/v1/objects/...`
+URLs the server hands out; the game's HTTP client opens them through the same `nn::ssl` calls, so the rule above applies
+to them unchanged: the host `oof.server` uses, validated the same way, plain bytes with `oof.tls = false`.
+
 ## 6. Sockets (`nn::socket`)
 
 - TCP: the WebSocket above. Standard BSD semantics (`Poll`, non-blocking `Fcntl`) are required.

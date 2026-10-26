@@ -28,7 +28,7 @@ but keep RTTI type names, which is how classes below were located.
 | Access key | an 8-character key next to the server ID; only feeds the client's CONNECT signature, which a WebSocket server does not need to check | binary `main+0x22b8ebc` |
 | Transport | PRUDP **Lite** over WebSocket (`wss://`, `ws://` also compiled in), subprotocol `NEX` | RTTI `PRUDPEndPointTemplatePRUDPLiteImp`, `ClientWebSocketDriver`; strings `Sec-WebSocket-Protocol` |
 | NAT check | `nncs1-%.n.n.srv.nintendo.net`, `nncs2-%.n.n.srv.nintendo.net` (UDP 10025 / 10125) | binary strings; ports per wiki |
-| Relay | Pia asks NEX for a relay server (`NexNatServerAddressResolveJob::StepRequestRelayServerSetting`) via NAT Traversal method 6 | binary strings |
+| Relay | Compiled in but switched off in 13.0.5: the game never calls NAT Traversal method 6 (see "Relay" below) | disassembly, `relay1` run |
 | Out of scope | `api-%%.znc.srv.nintendo.net` (phone-app voice chat), `www-aaaba-%-hac.cdn.nintendo.net` (news pages) | binary strings |
 
 ## RMC encoding details confirmed in the binary
@@ -326,12 +326,37 @@ Opening Spectator (with key 9007 on) sends **115/54** with no parameters; its ex
 `C2ReplayBroadcastingInfo` (`main+0x2970b0`). Without an answer the game says it could not show the replay. The
 broadcasts are replays of other players' matches kept in DataStore; the layout and the upload side are open.
 
-## Shared Content: DataStore 115/80 and 115/66 (2026-10-25)
+## Shared Content (2026-10-26): post, browse, download
 
-Opening "Shared content" sends 115/80 (no parameters; response a list of 0x18-byte elements) and 115/66
-(`Struct{String language, u16, u8, u8, Struct{u32, u32}, …}`, seen with `"eu_es"`; response a list of 0x238-byte
-elements, presumably `C2ShareMetaInfo`). Empty lists show "no content found" on every tab (recommended, videos,
-replays, stages, Mii fighters, spirit teams).
+Verified with the game: a replay saved in the Vault was posted ("Content posted."), listed by another account under
+Online > Shared Content, opened (title, rules, length, ID, poster, version shown) and played back after downloading it.
+
+| Step | Call | Layout | Evidence |
+| --- | --- | --- | --- |
+| Post (Vault > Replays > replay > Post, title from the software keyboard) | **115/24 PreparePostObject** | request: the public `DataStorePreparePostParam` (data type 2 for a replay, 976-byte meta binary, period 90, no persistence slot, tag `lang:<language>`); response `DataStoreReqPostInfo{u64 data ID, String url, List<{String key, String value}> request headers, List<same> form fields, Buffer root CA}` (reader `main+0x2907b0`) | `rep2`..`rep5` runs |
+| Upload | HTTP to the URL from 24 (through the game's own HTTP client) | the whole replay file (472,552 bytes for a 6:11 replay) | server log |
+| Complete and list | **115/62** | request: (`DataStorePreparePostParam` again, `DataStoreCompletePostParam{u64 data ID, bool success}`, share description); response `String` content ID (extractor `main+0x28e5f0`) | `rep3` capture |
+| Browse (a tab) | 115/80 (no parameters; `List<u64>`, empty is fine), then **115/66** per tab | see below | `rep5`, `view1` |
+| Play | **115/45 GetObjectInfos** `List<u64> data IDs` → `List<DataStoreReqGetInfo>`, `List<Result>` (extractor `main+0x28db50`); then HTTP GET of the URL | `DataStoreReqGetInfo{String url, List<key/value> headers, u32 size, Buffer root CA, u64 data ID}` (reader `main+0x288ee0`) | `view1` |
+| Likes, views | **115/96**, batched every few minutes | `Struct{List<(Struct{Map<String, Variant>}, Struct{u64 data ID})>}`; map keys `action_type` (0 listed, 1 opened, 3 liked, 6 played), `alg`, `list_page_type`, `thumbnail_size`, `play_time`; no response | `view2` |
+
+Share description (the third parameter of 62, structure version 1, serializer `main+0x283d80`): `u8 kind` (3 for a replay),
+`u8`, `u8` (255 seen), `String` poster nickname, `String`, `String`, `Buffer` fighters (one byte each: 6, 63 = Kirby,
+Bayonetta), `u8` (1 seen), `Map<String, Variant>` search attributes (`country`, `fighter_1`, `fighter_2`, `melee_kind`,
+`melee_mode`, `melee_rule`, `movie_time` (seconds), `nickname`, `score`, `stage`, `stage_type`, `use_spirits`,
+`version` = 0x9000), `u32`, `u32`.
+
+115/66 request: `Struct{String language, u16 data type (0xFFFF on "Hot!"), u8 (4 seen), u8 (3 seen), Struct{u32 offset,
+u32 size (100)}, List<{u16 data type, u32 version}>}`; the tabs ask for data type 4 (videos), 2 (replays), 3 (stages), 0
+(Mii fighters), 1 (spirit teams), and the list names what the game can show (0/0, 1/0x4000, 2/0x9000, 3/0x9000,
+4/0x3000). Response (reader `main+0x286dd0`): a structure that extends another, so the base part comes first with its
+own header: `Struct{List<C2ShareMetaInfo>}` then `Struct{u16}` (the total). Without the second part the game shows error
+2306-0116.
+
+`C2ShareMetaInfo` (reader `main+0x287cb0`): `DataStoreMetaInfo`, `u8`, `u8`, `u8` (the description's first three),
+`Buffer` fighters, `String` (shown as "ID: ..."), `List<Struct{bool, u64, u32}>` (reader `main+0x288380`; empty is
+accepted), `Struct{bool, u8, String, String, String}` (reader `main+0x2886b0`; the poster nickname shows from the first
+string).
 
 ### Matchmake Extension 109/58 (2026-10-24)
 
@@ -403,6 +428,27 @@ Pia resolves the NAT check hosts itself: `main+0xc4f6c`/`+0xc4fa4` pass the `nnc
 patterns (port 10025 set at `+0xc4fc0`) to its resolver `main+0xba850`, which calls
 `nn::socket::GetAddrInfo` directly (stub `main+0x39c0b70`, GOT `0x529f498`) with no `nsd::ResolveEx` in
 between. The `%` is therefore left to the socket resolver, as on the console (`docs/STANDARD.md` §4).
+
+## Relay (2026-10-26): switched off in SSBU 13.0.5
+
+Pia 5.19's relay (`NexNatRelay`, vtable `main+0x4f4b488`) is linked but never enabled, so no relay server can help two
+players whose NATs block each other; the original service had none either.
+
+- Every relay path first tests the Pia NEX facade's byte `+0xb2` (`main+0xc36d0`; the facade pointer is the global the
+  GOT slot `main+0x52a4d88` points to). The facade constructor (`main+0xc3220`) clears it and nothing in the game writes
+  it (no other byte store at that offset on the facade). With it clear, `StepRequestRelayServerSetting` (`main+0xd2fb0`)
+  → `NexNatRelay` slot 7 (`main+0xd1bb0`) returns before `CallGetRelaySignatureKey` (`main+0x259190`), and sends never
+  get a relay header (`main+0x10f960`).
+- Observed: no session ever called NAT Traversal 3/6; with the port's peer-to-peer traffic dropped on purpose (run
+  `relay1`, two instances, the server answering mode 1 with an address) the game still did not call it: after its
+  probes it reported the failure (3/4) and left the gathering.
+- For the record, what an enabled relay would use: 3/6 answers `mode` (> 0 enables it), the server's current time,
+  `address` (type 1 = host name, else an IPv4 literal; `main+0xd19c0`), `port` (0 means 12525) and the game server ID.
+  Each Pia packet would get a 44-byte header (`main+0xd2590` writes it, `main+0xd2790` checks it): `F5 D0 00 00`,
+  source IPv4, destination IPv4, source port, destination port, game server ID ^ 0xDB319579, a 32-bit value
+  ^ 0xBEE17D2F, server time in seconds (accepted within ±150 s), then MD5 (Pia's `Md5Context`) over a 16-byte key, the
+  first 28 header bytes and the first 50 payload bytes. The value and the key come from bytes `+0x568..+0x57b` of a
+  session structure (`main+0xed8f0`); their origin was not traced.
 
 ## Pia NAT check (2026-10-25)
 

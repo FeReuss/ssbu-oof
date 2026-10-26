@@ -29,8 +29,8 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
         // ReportNATTraversalResult / ReportNATProperties / ReportNATTraversalResultDetail: telemetry
         4 | 5 | 7 => Ok(Vec::new()),
         // GetRelaySignatureKey -> (i32 mode, DateTime, String address, u16 port, i32 type, u32 game server id)
-        // shortcut: mode 0 = no relay server; peers behind symmetric NATs cannot connect until a
-        // relay exists (docs/features.md, "P2P relay").
+        // Mode 0 = no relay server. SSBU 13.0.5 never calls this: its Pia relay is compiled in but switched off
+        // (docs/re/protocols.md, "Relay").
         6 => {
             let mut w = Writer::new();
             w.i32(0).u64(DateTime::now().0).string("").u16(0).i32(0).u32(0);

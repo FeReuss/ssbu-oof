@@ -90,7 +90,7 @@ pub fn dispatch(ctx: &mut Ctx, req: &Request) -> Vec<u8> {
                 );
                 // The request bytes are what decoding a new method starts from (debug only: they can hold player data).
                 tracing::debug!(
-                    body = req.body.iter().take(512).map(|b| format!("{b:02x}")).collect::<String>(),
+                    body = req.body.iter().take(4096).map(|b| format!("{b:02x}")).collect::<String>(),
                     "unimplemented RMC request body"
                 );
             } else {

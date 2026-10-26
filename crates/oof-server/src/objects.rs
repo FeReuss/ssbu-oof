@@ -1,7 +1,8 @@
-//! DataStore objects posted by players (115/21 PostMetaBinary), changed (115/38 ChangeMeta) and read back by data ID or
-//! persistence slot (115/8 GetMeta). Only the metadata is kept: no object payload is uploaded through this path. SSBU
-//! keeps each player's online record in slot 0 (match data, disconnects, conduct warnings: docs/re/protocols.md), so
-//! the store lives in SQLite (`database` in the config) and survives restarts. Data IDs are the table's row IDs.
+//! DataStore objects posted by players (115/21 PostMetaBinary, 115/24 PreparePostObject), changed (115/38 ChangeMeta)
+//! and read back by data ID or persistence slot (115/8 GetMeta). Objects prepared with 24 get their payload over HTTP
+//! (`/v1/objects/<id>`, shared content such as replays) and become readable once the poster completes them (115/26).
+//! SSBU keeps each player's online record in slot 0 (match data, disconnects, conduct warnings: docs/re/protocols.md),
+//! so the store lives in SQLite (`database` in the config) and survives restarts. Data IDs are the table's row IDs.
 //!
 //! shortcut: one SQLite file per server; a deployment with several nodes needs a shared database instead.
 
@@ -9,6 +10,8 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Objects kept per owner; SSBU posts one per player (slot 0) and changes it afterwards.
 const PER_OWNER: i64 = 64;
+/// Largest payload accepted (a replay is ~0.5 MB; videos are the largest shared content).
+pub const MAX_PAYLOAD: usize = 64 << 20;
 
 /// NEX `DataStorePermission`: who may read (or delete) an object.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +81,46 @@ impl Object {
     }
 }
 
+/// Signature in an object's upload (`put`) or download URL (`?k=`): HMAC-SHA256 of the data ID under the server
+/// secret, 128 bits as hex.
+pub fn url_key(secret: &[u8], id: u64, put: bool) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut m = Hmac::<sha2::Sha256>::new_from_slice(secret).expect("HMAC takes any key size");
+    m.update(if put { b"object-put" } else { b"object-get" });
+    m.update(&id.to_le_bytes());
+    m.finalize().into_bytes()[..16].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The file in a `multipart/form-data` body (the part named "file", as a presigned S3 POST sends it), or the whole
+/// body for any other content type.
+pub fn upload_body<'a>(content_type: &str, body: &'a [u8]) -> Option<&'a [u8]> {
+    let Some(boundary) = content_type.strip_prefix("multipart/form-data").and_then(|r| r.split("boundary=").nth(1))
+    else {
+        return Some(body);
+    };
+    let delimiter = format!("\r\n--{}", boundary.trim_matches('"'));
+    let mut rest = body.strip_prefix(&delimiter.as_bytes()[2..])?;
+    loop {
+        let end = rest.windows(delimiter.len()).position(|w| w == delimiter.as_bytes())?;
+        let (part, next) = rest.split_at(end);
+        let split = part.windows(4).position(|w| w == b"\r\n\r\n")?;
+        let headers = String::from_utf8_lossy(&part[..split]);
+        if headers.contains("name=\"file\"") {
+            return Some(&part[split + 4..]);
+        }
+        rest = &next[delimiter.len()..];
+    }
+}
+
+/// One Shared Content entry.
+pub struct Shared {
+    pub id: u64,
+    pub object: Object,
+    /// The game's share description (115/62), as sent.
+    pub info: Vec<u8>,
+    pub likes: u32,
+}
+
 pub struct ObjectStore {
     db: Connection,
 }
@@ -98,7 +141,13 @@ impl ObjectStore {
                  period INTEGER NOT NULL, refer_data_id INTEGER NOT NULL, flag INTEGER NOT NULL, tags TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS objects_owner ON objects (owner);
              CREATE TABLE IF NOT EXISTS slots (owner INTEGER NOT NULL, slot INTEGER NOT NULL,
-                 id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE, PRIMARY KEY (owner, slot));",
+                 id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE, PRIMARY KEY (owner, slot));
+             CREATE TABLE IF NOT EXISTS payloads (id INTEGER PRIMARY KEY REFERENCES objects (id) ON DELETE CASCADE,
+                 data BLOB NOT NULL, complete INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS shares (id INTEGER PRIMARY KEY REFERENCES objects (id) ON DELETE CASCADE,
+                 kind INTEGER NOT NULL, info BLOB NOT NULL);
+             CREATE TABLE IF NOT EXISTS likes (id INTEGER NOT NULL REFERENCES shares (id) ON DELETE CASCADE,
+                 pid INTEGER NOT NULL, PRIMARY KEY (id, pid));",
         )?;
         Ok(ObjectStore { db })
     }
@@ -135,9 +184,10 @@ impl ObjectStore {
                 tx.execute("DELETE FROM objects WHERE id = ?1", [old])?;
             }
         }
-        // The oldest objects beyond the bound go first (row IDs only grow).
+        // The oldest objects beyond the bound go first (row IDs only grow); objects in a persistence slot (the player's
+        // online record) are never evicted.
         tx.execute(
-            "DELETE FROM objects WHERE owner = ?1 AND id NOT IN \
+            "DELETE FROM objects WHERE owner = ?1 AND id NOT IN (SELECT id FROM slots) AND id NOT IN \
              (SELECT id FROM objects WHERE owner = ?1 ORDER BY id DESC LIMIT ?2)",
             params![owner, PER_OWNER],
         )?;
@@ -162,6 +212,81 @@ impl ObjectStore {
     pub fn get(&self, pid: u64, data_id: u64, owner: u64, slot: u16) -> rusqlite::Result<Option<(u64, Object)>> {
         let Some(id) = self.id(data_id, owner, slot)? else { return Ok(None) };
         Ok(self.load(id)?.filter(|o| o.permission.allows(o.owner, pid)).map(|o| (id as u64, o)))
+    }
+
+    /// Stores the payload of a prepared object; false for an unknown object or a size other than the one declared.
+    pub fn upload(&mut self, id: u64, data: &[u8]) -> rusqlite::Result<bool> {
+        let size: Option<u32> =
+            self.db.query_row("SELECT size FROM objects WHERE id = ?1", [id as i64], |r| r.get(0)).optional()?;
+        if size != Some(data.len() as u32) || data.len() > MAX_PAYLOAD {
+            return Ok(false);
+        }
+        self.db.execute(
+            "INSERT OR REPLACE INTO payloads (id, data, complete) VALUES (?1, ?2, 0)",
+            params![id as i64, data],
+        )?;
+        Ok(true)
+    }
+
+    /// CompletePostObject by the owner: a successful post with its payload uploaded becomes readable, a failed one is
+    /// deleted. False when `pid` has no such object or its payload never arrived.
+    pub fn complete(&mut self, pid: u64, id: u64, success: bool) -> rusqlite::Result<bool> {
+        if !self.load(id as i64)?.is_some_and(|o| o.owner == pid) {
+            return Ok(false);
+        }
+        if !success {
+            self.db.execute("DELETE FROM objects WHERE id = ?1", [id as i64])?;
+            return Ok(true);
+        }
+        Ok(self.db.execute("UPDATE payloads SET complete = 1 WHERE id = ?1", [id as i64])? == 1)
+    }
+
+    /// The completed payload of object `id`.
+    pub fn payload(&self, id: u64) -> rusqlite::Result<Option<Vec<u8>>> {
+        self.db
+            .query_row("SELECT data FROM payloads WHERE id = ?1 AND complete = 1", [id as i64], |r| r.get(0))
+            .optional()
+    }
+
+    /// Lists a completed object of `pid` in Shared Content with the game's share description (115/62).
+    pub fn share(&mut self, pid: u64, id: u64, kind: u8, info: &[u8]) -> rusqlite::Result<bool> {
+        if !self.load(id as i64)?.is_some_and(|o| o.owner == pid) || self.payload(id)?.is_none() {
+            return Ok(false);
+        }
+        self.db.execute(
+            "INSERT OR REPLACE INTO shares (id, kind, info) VALUES (?1, ?2, ?3)",
+            params![id as i64, kind, info],
+        )?;
+        Ok(true)
+    }
+
+    /// Shared Content of one DataStore data type (None: every type, most liked first), else newest first.
+    pub fn shared(&self, data_type: Option<u16>, offset: u32, limit: u32) -> rusqlite::Result<Vec<Shared>> {
+        let mut q = self.db.prepare(&format!(
+            "SELECT {COLUMNS}, s.id, s.info, (SELECT COUNT(*) FROM likes l WHERE l.id = s.id) AS n \
+             FROM shares s JOIN objects o ON o.id = s.id WHERE ?3 IS NULL OR o.data_type = ?3 \
+             ORDER BY CASE WHEN ?3 IS NULL THEN n ELSE 0 END DESC, s.id DESC LIMIT ?1 OFFSET ?2"
+        ))?;
+        let rows = q.query_map(params![limit, offset, data_type], |r| {
+            Ok(Shared {
+                id: r.get::<_, i64>(13)? as u64,
+                object: Object::from_row(r)?,
+                info: r.get(14)?,
+                likes: r.get(15)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// A player's like on shared content, given or taken back (an unknown or unshared ID is ignored).
+    pub fn like(&mut self, id: u64, pid: u64, on: bool) -> rusqlite::Result<()> {
+        let sql = if on {
+            "INSERT OR IGNORE INTO likes (id, pid) SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM shares WHERE id = ?1)"
+        } else {
+            "DELETE FROM likes WHERE id = ?1 AND pid = ?2"
+        };
+        self.db.execute(sql, params![id as i64, pid as i64])?;
+        Ok(())
     }
 
     /// The same lookup for a change, which only the owner may make; false when `pid` has no such object.
@@ -232,17 +357,58 @@ mod tests {
         for _ in 0..PER_OWNER {
             store.post(&object(5, 0), None).unwrap();
         }
-        assert!(
-            store.get(5, first, 0, 0).unwrap().is_none() && store.get(5, third, 0, 0).unwrap().is_none(),
-            "oldest kept"
-        );
-        assert!(store.get(5, 0, 5, 7).unwrap().is_none(), "evicted object still in its slot");
+        assert!(store.get(5, first, 0, 0).unwrap().is_none(), "oldest kept");
+        assert_eq!(store.get(5, 0, 5, 7).unwrap().map(|(id, _)| id), Some(third), "slot object evicted");
         let n: i64 = store.db.query_row("SELECT COUNT(*) FROM objects", [], |r| r.get(0)).unwrap();
-        assert_eq!(n, PER_OWNER);
+        assert_eq!(n, PER_OWNER + 1, "the bound plus the slot object");
         let mine = store.post(&object(5, 0), Some((8, false))).unwrap();
         assert!(!store.change(6, 0, 5, 8, |o| o.meta_binary = vec![0]).unwrap(), "another player changed the object");
         assert!(store.change(5, 0, 5, 8, |o| o.meta_binary = vec![9]).unwrap());
         assert_eq!(store.get(6, mine, 0, 0).unwrap().unwrap().1.meta_binary, vec![9]);
+    }
+
+    #[test]
+    fn payloads_upload_complete_and_slots_survive_the_bound() {
+        let mut store = ObjectStore::open(None).unwrap();
+        let record = store.post(&object(5, 3), Some((0, true))).unwrap();
+        let mut replay = object(5, 0);
+        replay.size = 3;
+        let id = store.post(&replay, None).unwrap();
+        assert!(!store.upload(id, &[1, 2]).unwrap(), "size other than the declared one");
+        assert!(store.upload(id, &[1, 2, 3]).unwrap());
+        assert_eq!(store.payload(id).unwrap(), None, "readable before CompletePostObject");
+        assert!(!store.complete(6, id, true).unwrap(), "completed by another player");
+        assert!(store.complete(5, id, true).unwrap());
+        assert_eq!(store.payload(id).unwrap(), Some(vec![1, 2, 3]));
+        assert!(!store.share(6, id, 3, b"x").unwrap(), "shared by another player");
+        assert!(store.share(5, id, 3, b"info").unwrap());
+        assert!(store.shared(Some(1), 0, 10).unwrap().is_empty(), "another data type listed");
+        store.like(id, 7, true).unwrap();
+        store.like(id, 7, true).unwrap();
+        store.like(id, 8, true).unwrap();
+        store.like(id, 8, false).unwrap();
+        store.like(999, 7, true).unwrap(); // never shared: ignored
+        let listed: Vec<_> =
+            store.shared(Some(0), 0, 10).unwrap().into_iter().map(|s| (s.id, s.info, s.likes)).collect();
+        assert_eq!(listed, vec![(id, b"info".to_vec(), 1)], "one like per player");
+        let failed = store.post(&replay, None).unwrap();
+        assert!(store.complete(5, failed, false).unwrap());
+        assert!(store.get(5, failed, 0, 0).unwrap().is_none(), "failed post kept");
+        for _ in 0..PER_OWNER {
+            store.post(&object(5, 0), None).unwrap();
+        }
+        assert!(store.get(5, record, 0, 0).unwrap().is_some(), "the slot-0 record was evicted");
+        assert_eq!(store.payload(id).unwrap(), None, "payload outlived its evicted object");
+    }
+
+    #[test]
+    fn upload_bodies() {
+        assert_eq!(upload_body("application/octet-stream", b"abc"), Some(&b"abc"[..]));
+        let body = b"--XyZ\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nv\r\n--XyZ\r\n\
+Content-Disposition: form-data; name=\"file\"; filename=\"f\"\r\nContent-Type: application/octet-stream\r\n\r\n\x01\r\n\x02\r\n--XyZ--\r\n";
+        assert_eq!(upload_body("multipart/form-data; boundary=XyZ", body), Some(&b"\x01\r\n\x02"[..]));
+        assert_eq!(upload_body("multipart/form-data; boundary=Other", body), None);
+        assert_ne!(url_key(b"s", 1, true), url_key(b"s", 1, false));
     }
 
     #[test]

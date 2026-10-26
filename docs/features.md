@@ -13,7 +13,7 @@ Status: **served** = implemented and tested; **partial** = works with documented
 | Server → client events | Notification 14 (`ProcessNotificationEvent`) | served for gatherings |
 | NAT detection | UDP NAT check (`nncs1/2`) on two addresses × 10025/10125 | served; Pia service on nncs1:33335 todo |
 | NAT traversal for Pia P2P | NAT Traversal 3, methods 1/3 relay `InitiateProbe` | served |
-| Relay for peers that cannot connect | NAT Traversal 6 + Pia relay server | todo (reports "no relay") |
+| Relay for peers that cannot connect | NAT Traversal 6 + Pia relay server | not used by SSBU 13.0.5 (its Pia relay is switched off; the server answers "no relay") |
 | Server settings / unique IDs | Utility 1, 7, 8 | served (empty settings) |
 
 The match itself never touches the server: Pia connects the consoles P2P (UDP) and runs the

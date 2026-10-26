@@ -28,6 +28,7 @@ addresses: `main+0x…` in the docs is an address in `main.elf`.
 | `nxre.py vtable <elf> <RTTI name>` | vtables of a class (applies `R_AARCH64_RELATIVE` relocations) |
 | `nex_protocols.py <elf> --json out.json` | every NEX client protocol: ID evidence, dispatcher bound, `CallXxx` functions, result extractors |
 | `ddl.py <elf> out.json [--class X] [--method N]` | request layouts decoded from the serializers |
+| `readers.py <elf> <addr> [--depth N]` | approximate layout a response extractor or structure reader reads (`--depth 0`: one function, callees as `@addr`) |
 
 Typical loop: `nex_protocols.py` → pick a method → `ddl.py --class X --method N` → for what the
 decoder prints as `?addr` or `(computed)`, read the code with `nxre.py func`.

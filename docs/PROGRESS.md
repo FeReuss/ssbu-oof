@@ -81,20 +81,27 @@ moves, and record dead ends so nobody repeats them.
    - **Online Tourney: round 1 is playable** (2026-10-26, later): the bracket screen abort is fixed (the game takes the
      bracket layout from the first TournamentInfo, so phase 0 is now announced when the entry closes, with 8/16/32 seats
      and the matches; empty seats fill the rest), tourney matchmaking (game mode 12) pairs only a match's players, and
-     201/13 answered 1 starts the match (docs/re/protocols.md, "Online Tourney"). **Exact next step:** find what the game
-     needs after a match: it posts its record (115/21 or 38), leaves the gathering and sends 201/11 `{tourney ID}`
-     (answered 0 → back to the fighter select). Try answering 201/11 with 1/2, then read the code that consumes the
-     answer (request `+0x144`, kinds 3/5 in `main+0x1736cd0`) and what makes the game send 201/14; results then feed the
-     next round (new phase, nodes' winner key `+0x50`). Dev scripts in the port's `SSBU_build/analysis/dev-scripts/`:
+     201/13 answered 1 starts the match, a match ends with **201/14** (answered 1; the replay is posted as DataStore type
+     18 first) and both players then wait for the next phase (docs/re/protocols.md, "Online Tourney", "Rules and
+     result"). Rules go in the event's period params (`[[events.periods]] params = { time_sec, stock, melee_rule }`).
+     **Exact next step:** read `main+0x239acc0` with the TournamentPlayerInfo reader (`main+0x2b1740`) to learn which
+     player field is the entry's `+0x81c` and what `seq+0x54c` is; then, when both 201/14 of a match are in, mark the
+     match finished (state 5), advance the winner (the `u32` both players send; seats 0 and 1 both sent 1), add the
+     round-2 match and announce phase 1 to the bracket's players. Dev scripts in the port's
+     `SSBU_build/analysis/dev-scripts/`:
      `tourney_pair.sh <run>` (two instances enter; no server variable needed now), `tourney_fight.sh <run> [s]`
-     (`SUICIDE=1`: b walks off, use `stock = 1`), `tourney_watch.sh` + `watch_trace.py`/`bracket_dump.py`/`step_trace.py`
+     (both fight; with `stock = 1` in the period a match ends at the first KO, ~30 s; `SUICIDE=1` did not make b fall), `tourney_watch.sh` + `watch_trace.py`/`bracket_dump.py`/`step_trace.py`
      (LLDB on instance a). Pitfalls: idle-interrupted matches give the test accounts a temporary online ban stored in
      their slot-0 record (`analysis/oof-share.db`, data type 16; delete those rows); kill earlier instances first (they
      live 25 min); input-file key holds are capped at 5000 ms (use `down`/`up`).
    - Spectator 115/54 (`C2ReplayBroadcastingInfo`): **not usable yet** (docs/features.md). Quickplay matches upload
      nothing even with switches 9010-9015 on, so broadcasts most likely come from Elite Smash matches (needs Matchmake
      Referee first). Tests need three instances (two fight, one watches; authorized by the maintainer).
-   - Then Elite Smash: Matchmake Referee 120 (1/3/4/12/14 layouts in "Request layouts"), Smash power.
+   - Then Elite Smash: Matchmake Referee 120 (1/3/4/12/14 layouts in "Request layouts"), Smash power. No game run has
+     called the Referee yet (Quickplay posts only DataStore records). Its client wrappers (`main+0x25abc0` StartRound,
+     `0x25adc0` EndRound, `0x25b1c0` GetOrCreateStats, `0x25b3c0` 14) are reached only through `+0x20` thunks
+     (`main+0x25abb0`...) with no relocation pointing at them, so find the callers from the owning service object (the
+     matchmake service's Referee member) or break on the wrappers with LLDB during a Quickplay match.
    - Tools: `tools/re/readers.py` decodes response readers (the counterpart of `ddl.py`); an approximation, check
      surprising results by hand.
    Pitfalls: the game ends Quickplay matches of idle/attack-in-place/self-destructing players (test inputs must move);

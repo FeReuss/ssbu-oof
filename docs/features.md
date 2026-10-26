@@ -84,9 +84,9 @@ Server: **partial (round 1 playable).** Events come from the config (`[[events]]
 (201/9) puts the player in the event's open bracket; when the entry countdown ends the server fills the bracket to 8,
 16 or 32 seats (empty seats for the rest), pairs seats in entry order and announces phase 0; the game shows the bracket,
 matchmakes (game mode 12, the server pairs only the match's players), asks 201/13 (answered 1) and the match is played.
-Verified with two instances (2026-10-26). Gaps: after the match the game goes back to the tourney's fighter select:
-results, later rounds, byes against empty seats, rewards and 4-player brackets are not done (docs/re/protocols.md,
-"Online Tourney", "Open").
+When it ends both report it (201/14, answered 1) and wait for the next phase. Verified with two instances (2026-10-26).
+Match rules come from the event period's params. Gaps: advancing winners and later rounds (the server does not announce
+phase 1 yet), byes against empty seats, rewards and 4-player brackets (docs/re/protocols.md, "Online Tourney").
 
 ## Spectator mode
 

@@ -241,6 +241,18 @@ pub fn handle(ctx: &mut Ctx, method: u32, r: &mut Reader) -> Reply {
             w.u32(u32::from(method == 13));
             Ok(w.into_bytes())
         }
+        // 14: the match result, Struct{u32 tourney ID, u32 (0 in round 1), u32 (1 from both players of a 1v1 whose
+        // seats were 0 and 1: likely the winner's key), u64 (the data ID of the replay the player posted just before as
+        // DataStore type 18, else 0)} -> u32. Sent by each player when a match ends (verified with the game, run tw20).
+        // shortcut: only logged; results drive the next round once the meaning of the u32s is confirmed.
+        14 => {
+            let (_, mut p) = r.structure()?;
+            let (id, a, b, replay) = (p.u32()?, p.u32()?, p.u32()?, p.u64()?);
+            tracing::info!(pid, id, a, b, replay, "tourney match result");
+            let mut w = Writer::new();
+            w.u32(1);
+            Ok(w.into_bytes())
+        }
         _ => Err(NOT_IMPLEMENTED),
     }
 }

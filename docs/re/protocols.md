@@ -374,8 +374,23 @@ sends **201/11** `{u32 tourney ID}`; answered `u32 0` the game goes back to the 
 next round). No 201/14 was sent. The request switch (`main+0x1736cd0`, jump table `main+0x44f4100`) sends kind 1 as
 201/11 when the tourney ID is known and as 201/10 (by event) before; kind 3 is 201/11 too, kind 4 201/13, kind 5 201/14
 (`{u32 tourney ID, u32, u32, u64}`); 13's and 14's answers are stored at the request's `+0x144`.
-Open: what 201/11's answer means (leaving, or the player's state after a match), how results reach the server (the
-records 115/21/38 carry Online Tourney counters; 201/14 unseen), and how later rounds are announced.
+**Rules and result (2026-10-26, runs `tw19`..`tw21`).** The match rules come from the event's **current period** params
+(`time_sec`, `stock`, `melee_rule`), not from the event's own params: with them at event level the match was a timed
+match with no time limit (score +1/-1, never ends); with `stock = 1` in the period the match ends at the first KO.
+Then one player posts the match replay (DataStore 115/24 + upload + 115/26, data type 18, ~25 KB, period 1, no slot)
+and **both send 201/14** `{u32 tourney ID, u32 0, u32 1, u64}`, the `u64` being the data ID of the replay that player
+posted (0 for the other). Answered with an error, both then leave (201/11, 50/1); answered **`u32 1`**, neither sends
+201/11: both leave the match gathering (50/1) and wait on a loading screen, presumably for the next phase.
+
+**Match fields, from the winner resolution `main+0x239acc0` (round, position):** the sequence keeps the matches as
+0x40-byte entries (`seq+0x550`): `+0` = the TournamentMatchInfo's first `u32`, a **global match ID**, consecutive
+across rounds (the node at round r, position p is `first ID + nodes in earlier rounds + p`); `+8` = first `u8`, the
+**round** (the layout choice counts only matches with 0 there); `+9` = second `u8`, the **state** (`5` = finished, only
+then is a winner set); `+0x28` the player keys. For a finished match the winner is the node player whose entry field
+`+0x81c` (0x820-byte entries built from TournamentPlayerInfo) equals a value taken from `seq+0x54c` for the first
+match, else from the keys of the match named by the entry's `+4` (the second `u32`). **Open:** which TournamentPlayerInfo
+field becomes `+0x81c` and what `seq+0x54c` holds; then announce phase 1 with round 1 finished (state 5) and the
+round-2 matches.
 
 ## Spectator: DataStore 115/54 (2026-10-25)
 

@@ -3,6 +3,21 @@
 Read this first in a new session. Keep it current: update "State" and "Next" whenever a milestone
 moves, and record dead ends so nobody repeats them.
 
+## Session handoff (2026-10-26, ends ~12:00 UTC) — read first
+
+- **Done:** Online Tourney plays through with two instances: whole bracket (IDs from the final down, next-match links,
+  8/16/32 seats, empty seats settle as byes), phase 0 announced when the entry closes, tourney matchmaking (mode 12)
+  pairs a match's players, 201/13 `{tourney, match ID}` → 1 starts the match, 201/14 `{tourney, match ID, winner key,
+  replay data ID}` → 1 moves the winner on; rules come from the event **period** params. Matchmake Referee 120/12
+  GetOrCreateStats answered (initial rating, nothing stored). Commits b0b6252..fe7f70b.
+- **Not reached:** tourney end state (the champion's game fetches 201/12 every ~67 ms after winning), later rounds
+  between real players (needs 3+ instances), Referee rounds (1/3) and Smash power/Elite Smash, Spectator (115/54).
+- **Discoveries:** the game fixes the bracket layout from the first TournamentInfo; the winner of a node is a player key
+  found through the next match; each view shows its own player first (there was no desync); the port's two-instance
+  probes need `OOF_VIRTUAL_INDEX_1/2` (else NAT traversal times out at 10 s); 120/12 appears with switches 9010-9015.
+- **Exact next step:** "Next" 0, Online Tourney bullet: find what the champion's sequence waits for after 201/12
+  (tourney sequence `main+0x16c3cd0`; TournamentInfo's second `u32` / second `u8`).
+
 ## State (2026-10-26)
 
 - **Reverse engineering** of SSBU 13.0.5's online stack: middleware versions, hosts, transport,

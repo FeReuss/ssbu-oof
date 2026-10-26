@@ -99,7 +99,7 @@ ours, from their layouts and the 2026-10-25 arena run below).
 | Matchmake Referee 1 | `Struct{u32, u32, List<u64>}` | round: gathering, category, participants |
 | Matchmake Referee 3 | `Struct{u64, List<Struct{u64, u32, u32, u32, qBuffer, u32}>}` | round ID + per-player result |
 | Matchmake Referee 4 | `u64` | round ID |
-| Matchmake Referee 12 | `Struct{u32, u32}` | stats target |
+| Matchmake Referee 12 | `Struct{u32 category, u32 initial rating}` (seen: 1, 1500) | MatchmakeRefereeStatsInitParam; response MatchmakeRefereeStats `{u64 unique ID, u32 category, u64 PID, u32 × 14}` (reader `main+0x25c130`: NEX's 13 counters, the rating 13th, plus one) |
 | Matchmake Referee 14 | `Struct{u32, u32, u32}` | SSBU-only |
 
 ### DataStore calls made at login

@@ -105,7 +105,11 @@ moves, and record dead ends so nobody repeats them.
      gathering the player sent 110/11 then **120/12 GetOrCreateStats `{u32 1, u32 1500}`** (unimplemented; the response
      reader `main+0x25c130` reads roughly `{u8, u32, u64, u32, u32}`, to be confirmed by hand). The Quickplay mesh failure
      of that run was the test setup (no virtual addresses for the two instances), not the server; with `oof-virt.toml`
-     (no switches 9010-9015) Quickplay plays and the Referee is not called, so those switches likely enable it. Its client wrappers (`main+0x25abc0` StartRound,
+     (no switches 9010-9015) Quickplay plays and the Referee is not called, so those switches likely enable it.
+     120/12 is now answered with new stats at the initial rating (`protocols/referee.rs`, nothing stored yet). A Quickplay
+     run with the switches (`qp32`, 3 matches) made no Referee call: 120/12 came in `qp29` after a failed matchmaking,
+     right after 110/11, so it belongs to another screen (Smash power display, the online menu). Next: find the screen
+     that shows Smash power / Elite eligibility and which call carries the per-fighter power (StartRound/EndRound unseen). Its client wrappers (`main+0x25abc0` StartRound,
      `0x25adc0` EndRound, `0x25b1c0` GetOrCreateStats, `0x25b3c0` 14) are reached only through `+0x20` thunks
      (`main+0x25abb0`...) with no relocation pointing at them, so find the callers from the owning service object (the
      matchmake service's Referee member) or break on the wrappers with LLDB during a Quickplay match.

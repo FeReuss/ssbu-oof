@@ -5,6 +5,7 @@
 pub mod datastore;
 pub mod matchmake;
 pub mod nat;
+pub mod referee;
 pub mod secure;
 pub mod ticket_granting;
 pub mod tournament;
@@ -25,6 +26,7 @@ pub const MATCH_MAKING_EXT: u16 = 50;
 pub const MATCHMAKE_EXTENSION: u16 = 109;
 pub const UTILITY: u16 = 110;
 pub const DATA_STORE: u16 = 115;
+pub const MATCHMAKE_REFEREE: u16 = 120;
 pub const TOURNAMENT: u16 = 201;
 
 /// A NEX error code for a failed call. Stream read errors become `Core::InvalidArgument`, so
@@ -72,6 +74,7 @@ pub fn dispatch(ctx: &mut Ctx, req: &Request) -> Vec<u8> {
         (true, NAT_TRAVERSAL) => nat::handle(ctx, req.method, r),
         (true, DATA_STORE) => datastore::handle(ctx, req.method, r),
         (true, TOURNAMENT) => tournament::handle(ctx, req.method, r),
+        (true, MATCHMAKE_REFEREE) => referee::handle(ctx, req.method, r),
         (true, MATCH_MAKING | MATCH_MAKING_EXT | MATCHMAKE_EXTENSION) => {
             matchmake::handle(ctx, req.protocol, req.method, r)
         }

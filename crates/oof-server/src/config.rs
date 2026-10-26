@@ -40,14 +40,21 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NatCheck {
-    /// `nncs1`: an IPv4 address of this host, serving UDP 10025 and 10125.
+    /// `nncs1`: the IPv4 address clients reach this host at, serving UDP 10025 and 10125 (and 33334/33335).
     pub primary: Ipv4Addr,
-    /// `nncs2`: another IPv4 address of this host, serving the same ports. Pia picks its second
-    /// NAT check server as the first address with the same port and a different IP than the
-    /// first one (`main+0xc6590`), and fails the NAT check (0x10c08) when there is none.
-    /// shortcut: the bound addresses are the announced ones; add public overrides when a node sits
-    /// behind 1:1 NAT (cloud elastic IPs).
+    /// `nncs2`: another IPv4 address serving the same ports. Pia picks its second NAT check server as the first
+    /// address with the same port and a different IP than the first one (`main+0xc6590`), and fails the NAT check
+    /// (0x10c08) when there is none.
     pub secondary: Ipv4Addr,
+    /// Local address to bind for `primary` when the host does not own it (1:1 NAT, e.g. cloud elastic IPs).
+    pub primary_bind: Option<Ipv4Addr>,
+    /// Same for `secondary`; unused with `remote_secondary`.
+    pub secondary_bind: Option<Ipv4Addr>,
+    /// `secondary` belongs to another host, which runs `oof-server nat-check <secondary> [<bind address>]`; this
+    /// server then serves `primary` only. Pia never needs an answer from the other address, so the two hosts share
+    /// nothing.
+    #[serde(default)]
+    pub remote_secondary: bool,
 }
 
 fn default_token_ttl() -> u64 {

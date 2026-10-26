@@ -1,12 +1,13 @@
 //! NAT check server (`nncs1`/`nncs2`): Pia's NatDetectionJob sends 16-byte big-endian UDP probes and
-//! learns its public address and NAT behaviour from where and how the answers come back.
+//! learns its public address and NAT behaviour from the answers.
 //!
 //! Message: `u32 type | u32 external port | u32 external IPv4 | u32 address`. The server fills in
-//! the sender's address. Types 3 and 102 are answered from the other port, type 2 from the other
-//! address and port. The two addresses are `nncs1` and `nncs2` (config `nat_check`), each serving
-//! both ports.
+//! the sender's address. Pia 5.19 sends only types 101 and 102 to nncs1 and 103 to nncs2, all to port
+//! 10025; 102 is answered from the other port, the rest from the same socket. No answer comes from the
+//! other address, so each address serves its two ports on its own and nncs2 may be another host
+//! (config `nat_check.remote_secondary`, `oof-server nat-check`).
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 
@@ -32,18 +33,12 @@ pub fn pia_dummy_station(packet: &[u8]) -> Option<(u32, u32)> {
     Some((be(0x38), be(0x48)))
 }
 
-/// Which socket answers a probe, relative to the one that received it.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ReplyFrom {
-    Same,
-    OtherPort,
-    OtherAddressAndPort,
-}
-
-/// Answer for one probe: which socket replies and the reply bytes.
-pub fn answer(probe: &[u8], from: SocketAddr, server_ip: Option<std::net::Ipv4Addr>) -> Option<(ReplyFrom, [u8; 16])> {
+/// Answer for one probe: whether it comes from the other port of the receiving address, and the reply bytes.
+/// Pia accepts only answers of type 101..=103 (`main+0xc86b4`) and stores the message, not where it came from; it
+/// never reads the last field (the answering address here).
+pub fn answer(probe: &[u8], from: SocketAddr, address: Ipv4Addr) -> Option<(bool, [u8; 16])> {
     let kind = u32::from_be_bytes(probe.get(..4)?.try_into().ok()?);
-    if probe.len() != 16 || !matches!(kind, 1..=5 | 101..=103) {
+    if probe.len() != 16 || !(101..=103).contains(&kind) {
         return None;
     }
     let IpAddr::V4(ip) = from.ip() else { return None };
@@ -51,24 +46,40 @@ pub fn answer(probe: &[u8], from: SocketAddr, server_ip: Option<std::net::Ipv4Ad
     out[..4].copy_from_slice(&kind.to_be_bytes());
     out[4..8].copy_from_slice(&(from.port() as u32).to_be_bytes());
     out[8..12].copy_from_slice(&ip.octets());
-    out[12..].copy_from_slice(&server_ip.map(|i| i.octets()).unwrap_or_default());
-    let reply = match kind {
-        2 => ReplyFrom::OtherAddressAndPort,
-        3 | 102 => ReplyFrom::OtherPort,
-        _ => ReplyFrom::Same,
-    };
-    Some((reply, out))
+    out[12..].copy_from_slice(&address.octets());
+    Some((kind == 102, out))
 }
 
-/// Serves `sockets[address][port]` (addresses `nncs1`, `nncs2`; ports as in [`PORTS`]) and `pia` (nncs1 at
-/// [`PIA_PORTS`]): a dummy's source address is the client's public UDP address, which becomes its public station
-/// URL for peers (`GetSessionURLs`).
-pub async fn run(
-    sockets: [[UdpSocket; 2]; 2],
-    pia: [UdpSocket; 2],
-    server_ip: Option<std::net::Ipv4Addr>,
-    state: Arc<crate::state::State>,
-) {
+/// Binds `ip` at both `ports`; a NAT check that cannot listen is a startup error.
+pub async fn bind(ip: Ipv4Addr, ports: [u16; 2]) -> [UdpSocket; 2] {
+    let bind = |port| async move {
+        let a = SocketAddr::from((ip, port));
+        UdpSocket::bind(a).await.unwrap_or_else(|e| panic!("binding {a}: {e}"))
+    };
+    [bind(ports[0]).await, bind(ports[1]).await]
+}
+
+/// Serves one NAT check address announced as `address`: `sockets` are bound at its [`PORTS`].
+pub async fn serve(sockets: [UdpSocket; 2], address: Ipv4Addr) {
+    let sockets = Arc::new(sockets);
+    let port = |p: usize| {
+        let sockets = sockets.clone();
+        async move {
+            let mut buf = [0u8; 64];
+            loop {
+                let Ok((n, from)) = sockets[p].recv_from(&mut buf).await else { continue };
+                if let Some((other_port, reply)) = answer(&buf[..n], from, address) {
+                    let _ = sockets[if other_port { 1 - p } else { p }].send_to(&reply, from).await;
+                }
+            }
+        }
+    };
+    tokio::join!(port(0), port(1));
+}
+
+/// Listens on nncs1's [`PIA_PORTS`]: a dummy's source address is the client's public UDP address, which becomes its
+/// public station URL for peers (`GetSessionURLs`).
+pub async fn listen_pia(sockets: [UdpSocket; 2], state: Arc<crate::state::State>) {
     let listen = |sock: UdpSocket| {
         let state = state.clone();
         async move {
@@ -83,49 +94,51 @@ pub async fn run(
             }
         }
     };
-    let [p0, p1] = pia;
-    tokio::spawn(listen(p0));
-    tokio::spawn(listen(p1));
-    let sockets = Arc::new(sockets);
-    let serve = |a: usize, p: usize| {
-        let sockets = sockets.clone();
-        async move {
-            let mut buf = [0u8; 64];
-            loop {
-                let Ok((n, from)) = sockets[a][p].recv_from(&mut buf).await else { continue };
-                if let Some((by, reply)) = answer(&buf[..n], from, server_ip) {
-                    let sock = match by {
-                        ReplyFrom::Same => &sockets[a][p],
-                        ReplyFrom::OtherPort => &sockets[a][1 - p],
-                        ReplyFrom::OtherAddressAndPort => &sockets[1 - a][1 - p],
-                    };
-                    let _ = sock.send_to(&reply, from).await;
-                }
-            }
-        }
-    };
-    tokio::join!(serve(0, 0), serve(0, 1), serve(1, 0), serve(1, 1));
+    let [p0, p1] = sockets;
+    tokio::join!(listen(p0), listen(p1));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ReplyFrom, answer};
+    use super::answer;
 
     #[test]
     fn fills_external_address_and_picks_port() {
         let from = "203.0.113.7:50000".parse().unwrap();
+        let server = "198.51.100.1".parse().unwrap();
         let mut probe = [0u8; 16];
-        probe[3] = 1;
-        let (by, reply) = answer(&probe, from, Some("198.51.100.1".parse().unwrap())).unwrap();
-        assert_eq!(by, ReplyFrom::Same);
-        assert_eq!(reply, [0, 0, 0, 1, 0, 0, 0xC3, 0x50, 203, 0, 113, 7, 198, 51, 100, 1]);
-        probe[3] = 3;
-        assert_eq!(answer(&probe, from, None).unwrap().0, ReplyFrom::OtherPort);
-        probe[3] = 2;
-        assert_eq!(answer(&probe, from, None).unwrap().0, ReplyFrom::OtherAddressAndPort);
-        probe[3] = 9;
-        assert!(answer(&probe, from, None).is_none());
-        assert!(answer(&probe[..8], from, None).is_none());
+        probe[3] = 101;
+        let (other_port, reply) = answer(&probe, from, server).unwrap();
+        assert!(!other_port);
+        assert_eq!(reply, [0, 0, 0, 101, 0, 0, 0xC3, 0x50, 203, 0, 113, 7, 198, 51, 100, 1]);
+        probe[3] = 102;
+        assert!(answer(&probe, from, server).unwrap().0);
+        probe[3] = 103;
+        assert!(!answer(&probe, from, server).unwrap().0);
+        for kind in [0, 2, 104] {
+            probe[3] = kind;
+            assert!(answer(&probe, from, server).is_none(), "{kind}");
+        }
+        assert!(answer(&probe[..8], from, server).is_none());
+    }
+
+    /// A NAT check address served alone (as `oof-server nat-check` does for a remote nncs2): 103 comes back from the
+    /// socket it was sent to, 102 from the other port.
+    #[tokio::test]
+    async fn serves_one_address_on_its_own() {
+        let ip = std::net::Ipv4Addr::LOCALHOST;
+        let sockets =
+            [tokio::net::UdpSocket::bind((ip, 0)).await.unwrap(), tokio::net::UdpSocket::bind((ip, 0)).await.unwrap()];
+        let ports = sockets.each_ref().map(|s| s.local_addr().unwrap());
+        tokio::spawn(super::serve(sockets, ip));
+        let client = tokio::net::UdpSocket::bind((ip, 0)).await.unwrap();
+        let mut buf = [0u8; 64];
+        for (kind, answered_by) in [(103u32, ports[0]), (102, ports[1])] {
+            client.send_to(&[kind.to_be_bytes(), [0; 4], [0; 4], [0; 4]].concat(), ports[0]).await.unwrap();
+            let (n, from) = client.recv_from(&mut buf).await.unwrap();
+            assert_eq!((n, from), (16, answered_by), "{kind}");
+            assert_eq!(buf[4..8], (client.local_addr().unwrap().port() as u32).to_be_bytes());
+        }
     }
 
     #[test]

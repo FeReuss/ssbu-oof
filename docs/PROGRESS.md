@@ -59,6 +59,13 @@ moves, and record dead ends so nobody repeats them.
   10025/10125 (config `nat_check.primary/secondary` are addresses, not socket addresses) and announces
   them in `GET /v1/status`; standard §4/§8 updated. Secure Connection 11/7 ReplaceURL is implemented.
   With the MacNativeGames port two instances now finish the NAT check and report NAT properties.
+- **NAT check deployable on one-IPv4 hosts (2026-10-26, afternoon):** Pia 5.19 only sends probes 101/102 to nncs1 and
+  103 to nncs2 and never needs an answer from the other address (`docs/re/protocols.md`, "Pia NAT check"), so each
+  address now serves its two ports on its own (types 1–5 and "answer from the other address" removed). Config:
+  `primary_bind`/`secondary_bind` (both addresses on one host behind 1:1 NAT) and `remote_secondary = true` with
+  `oof-server nat-check <secondary> [<bind>]` on a second machine (no config, no secret). Verified with the release
+  binary: main server + helper process, probes 101/102/103 answered from the expected sockets. Not yet tried with the
+  real game against a remote nncs2.
 
 - **First online match (2026-10-25, evening):** two real instances on one Mac (port's virtual network, this server with
   `trust_client_address`) went from Quickplay to a synced 1-on-1 match. During the match each player posts its
@@ -166,6 +173,9 @@ moves, and record dead ends so nobody repeats them.
 - **Config change (2026-10-25):** `[nat_check] primary/secondary` are now IPv4 addresses (each serving UDP
   10025 and 10125), no longer `ip:port`; older configs (e.g. the port's `analysis/dev-scripts/oof.toml`) fail to
   parse until updated, and both addresses must differ. On one Mac use 127.0.0.1 and the LAN address.
+- Public server with one IPv4 (e.g. the VPS): there is no way around a second address (Pia compares IPs), but it can
+  be any machine that receives UDP 10025/10125 on a public IPv4 (`remote_secondary`); a home router forwarding those
+  two ports to a box running `oof-server nat-check <public IP> <LAN IP>` works if the home IP is stable.
 - The 76-byte packets to nncs1:33335 are Pia NAT Protocol dummies: do not build a service for them first.
 
 - The NEX protocol-ID heuristic "immediate before the ClientProtocol constructor" returns service

@@ -753,6 +753,9 @@ async fn status_announces_nat_check_addresses() {
         c.nat_check = Some(crate::config::NatCheck {
             primary: "203.0.113.1".parse().unwrap(),
             secondary: "203.0.113.2".parse().unwrap(),
+            primary_bind: None,
+            secondary_bind: None,
+            remote_secondary: true,
         })
     })
     .await;
@@ -764,7 +767,13 @@ async fn status_announces_nat_check_addresses() {
 fn nat_check_needs_two_addresses() {
     let mut config = test_config("127.0.0.1:1".parse().unwrap());
     for (a, b) in [("127.0.0.1", "127.0.0.1"), ("0.0.0.0", "127.0.0.1")] {
-        config.nat_check = Some(crate::config::NatCheck { primary: a.parse().unwrap(), secondary: b.parse().unwrap() });
+        config.nat_check = Some(crate::config::NatCheck {
+            primary: a.parse().unwrap(),
+            secondary: b.parse().unwrap(),
+            primary_bind: None,
+            secondary_bind: None,
+            remote_secondary: false,
+        });
         assert!(State::new(config.clone()).is_err(), "{a} {b}");
     }
 }

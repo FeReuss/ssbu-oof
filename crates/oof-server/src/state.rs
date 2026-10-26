@@ -49,7 +49,7 @@ impl State {
         if let Some(nat) = &config.nat_check
             && (nat.primary == nat.secondary || nat.primary.is_unspecified() || nat.secondary.is_unspecified())
         {
-            return Err("nat_check: primary and secondary must be two different addresses of this host".into());
+            return Err("nat_check: primary and secondary must be two different addresses".into());
         }
         let kerberos_key = oof_nex::kerberos::md5(&[b"oof-kerberos".as_slice(), &secret].concat());
         let seed = u64::from_le_bytes(crate::accounts::random_bytes()) >> 16;

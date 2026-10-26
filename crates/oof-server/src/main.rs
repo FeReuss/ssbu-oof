@@ -385,6 +385,16 @@ async fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("nat-check") {
+        // `oof-server nat-check <address> [<bind address>]`: only the NAT check address `nncs2` on a host of its own
+        // (`nat_check.remote_secondary` on the main server); needs no config.
+        let ip = |i: usize| args.get(i).map(|s| s.parse().unwrap_or_else(|e| panic!("{s}: {e}")));
+        let Some(address) = ip(1) else { panic!("usage: oof-server nat-check <address> [<bind address>]") };
+        let sockets = natcheck::bind(ip(2).unwrap_or(address), natcheck::PORTS).await;
+        tracing::info!(%address, "NAT check listening on UDP 10025/10125");
+        natcheck::serve(sockets, address).await;
+        return;
+    }
     let path = args.first().cloned().unwrap_or_else(|| "oof.toml".into());
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
     let config: config::Config = toml::from_str(&text).unwrap_or_else(|e| panic!("parsing {path}: {e}"));
@@ -404,17 +414,15 @@ async fn main() {
     let listen = config.listen;
     let state = Arc::new(State::new(config).unwrap_or_else(|e| panic!("{path}: {e}")));
     if let Some(nat) = &state.config.nat_check {
-        let bind = |ip, port| async move {
-            let a = SocketAddr::new(ip, port);
-            tokio::net::UdpSocket::bind(a).await.unwrap_or_else(|e| panic!("binding {a}: {e}"))
-        };
-        let [p0, p1] = natcheck::PORTS;
-        let (a, b) = (nat.primary.into(), nat.secondary.into());
-        let sockets = [[bind(a, p0).await, bind(a, p1).await], [bind(b, p0).await, bind(b, p1).await]];
-        let [q0, q1] = natcheck::PIA_PORTS;
-        let pia = [bind(a, q0).await, bind(a, q1).await];
-        tokio::spawn(natcheck::run(sockets, pia, state.config.public_host.parse().ok(), state.clone()));
-        tracing::info!(primary = %nat.primary, secondary = %nat.secondary, "NAT check listening on UDP 10025/10125 (+33334/33335 on primary)");
+        let primary = nat.primary_bind.unwrap_or(nat.primary);
+        tokio::spawn(natcheck::serve(natcheck::bind(primary, natcheck::PORTS).await, nat.primary));
+        tokio::spawn(natcheck::listen_pia(natcheck::bind(primary, natcheck::PIA_PORTS).await, state.clone()));
+        if !nat.remote_secondary {
+            let secondary = nat.secondary_bind.unwrap_or(nat.secondary);
+            tokio::spawn(natcheck::serve(natcheck::bind(secondary, natcheck::PORTS).await, nat.secondary));
+        }
+        tracing::info!(primary = %nat.primary, secondary = %nat.secondary, remote_secondary = nat.remote_secondary,
+            "NAT check listening on UDP 10025/10125 (+33334/33335 on primary)");
     }
     tokio::spawn(state::kick_banned_every(state.clone(), std::time::Duration::from_secs(30)));
     let listener = tokio::net::TcpListener::bind(listen).await.unwrap_or_else(|e| panic!("binding {listen}: {e}"));

@@ -27,10 +27,16 @@ database = "oof.db"
 # trust_client_address = true
 
 [nat_check]
-# nncs1 and nncs2: two different IPv4 addresses of this host, each serving UDP 10025 and 10125.
+# nncs1 and nncs2: two different public IPv4 addresses, each serving UDP 10025 and 10125 (nncs1 also 33334/33335).
 # Pia needs both; the port reads them from GET /v1/status.
 primary = "203.0.113.1"
 secondary = "203.0.113.2"
+# Behind 1:1 NAT (cloud elastic/reserved IPs) the host does not own the public addresses: bind these instead.
+# primary_bind = "10.0.0.5"
+# secondary_bind = "10.0.0.6"
+# A host with one IPv4: serve nncs2 from another machine, which runs `oof-server nat-check 203.0.113.2` (add its
+# local address as a second argument when it sits behind 1:1 NAT) and needs neither this file nor the secret.
+# remote_secondary = true
 
 # Online services the game switches on from the server (Utility 110/7 GetIntegerSettings, index 0). The game checks
 # these keys before opening each online sequence and shows "service not available" when a key is not 1 (keys 9006 and

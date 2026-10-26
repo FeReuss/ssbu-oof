@@ -403,7 +403,9 @@ and 1; earlier runs sent 0 or 1 because that match had those IDs), 201/14 is `{u
 both), u64 replay data ID}`, and about 13 s after 201/14 both players leave the gathering and **fetch 201/12 again by
 themselves**, expecting the result in the bracket. With `time_sec = 60, stock = 1` in the period the match shows a timer
 and ends with "Game!", the winner screen and the stats. **The two instances disagreed on the result** (each view showed
-the damage of the other player: a desync of the match), which Quickplay did not do; see PROGRESS "Next".
+the damage of the other player: a desync of the match), which Quickplay did not do; see PROGRESS "Next". In both views
+the local player lost, and both reported `1` in 201/14's third field, so that field is most likely the reporting
+player's own result (1 = lost / second place); `tw20` and `tw21` match the same pattern.
 
 ## Spectator: DataStore 115/54 (2026-10-25)
 
